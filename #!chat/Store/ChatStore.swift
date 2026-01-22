@@ -134,10 +134,15 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         return nil
     }
 
-    /// Check if we can actually send messages to the given selection
-    /// This checks the real connection state, not just the UI status
+    /// Check if we can actually send messages to the given selection.
+    /// This checks both the observable connection status AND the underlying client state.
     func canSendMessage(to selectionID: UUID?) -> Bool {
         guard let server = serverForSelection(selectionID) else { return false }
+
+        // First check the observable status - this is the source of truth for UI state
+        guard server.connectionStatus == .connected else { return false }
+
+        // Then verify the client actually exists and is registered
         guard let client = connectionService.clients[server.id] else { return false }
         return client.canSend
     }
@@ -243,14 +248,14 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
         // Map IRCClient.ConnectionState to IRCServer.ConnectionStatus
-        // Note: We only handle .connecting and .connected here.
-        // Disconnect scenarios are handled by specific callbacks (serverDidDisconnect,
-        // serverFailedToRegister) which set more specific statuses like .connectionTimeout
         switch state {
         case .disconnected:
-            // Don't set status here - let specific disconnect callbacks handle it
-            // They provide more context (timeout vs clean disconnect vs reconnecting)
-            break
+            // Only update if we think we're connected or connecting.
+            // If we're already in a disconnect-related state (reconnecting, timeout, failed),
+            // a more specific callback will handle setting the appropriate status.
+            if server.connectionStatus == .connected || server.connectionStatus == .connecting {
+                server.connectionStatus = .disconnected
+            }
         case .connecting:
             // Only set to connecting if not already in a reconnecting state
             if server.connectionStatus != .reconnecting {

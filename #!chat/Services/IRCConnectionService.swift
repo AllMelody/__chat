@@ -70,6 +70,14 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         let connectedServerIDs = Array(clients.keys)
 
         for serverID in connectedServerIDs {
+            // Update server state IMMEDIATELY before cleanup.
+            // This prevents race conditions where UI thinks we're still connected.
+            if let server = serverLookup?(serverID) {
+                if server.connectionStatus == .connected || server.connectionStatus == .connecting {
+                    server.connectionStatus = .disconnected
+                }
+            }
+
             // Close the client and notify delegate
             if let client = clients.removeValue(forKey: serverID) {
                 client.close()
@@ -154,19 +162,26 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
     
     private func handleConnectionTimeout(for server: IRCServer) {
-        guard server.connectionStatus == .connecting else { return }
+        // Allow timeout handling if we're still trying to connect OR if we just
+        // received a disconnect during the connection attempt. Prevents skipping
+        // cleanup when connectionStateChanged(.disconnected) fires before timeout.
+        let validStates: [IRCServer.ConnectionStatus] = [.connecting, .disconnected]
+        guard validStates.contains(server.connectionStatus) else { return }
+
+        // Only log timeout message if we were still connecting (not already disconnected)
+        if server.connectionStatus == .connecting {
+            let msg = ChatMessage(time: Date(), text: "Connection to \(server.name) timed out")
+            server.log.append(msg)
+            delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
+        }
 
         server.connectionStatus = .connectionTimeout
-        
-        let msg = ChatMessage(time: Date(), text: "Connection to \(server.name) timed out")
-        server.log.append(msg)
-        delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
-        
-        // Close the client connection
+
+        // Close the client connection if it exists
         if let client = clients.removeValue(forKey: server.id) {
             client.close()
         }
-        
+
         // Attempt reconnection if enabled
         if server.shouldAutoReconnect {
             scheduleReconnection(for: server)
@@ -489,6 +504,17 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
 
+            // Update server state IMMEDIATELY before any cleanup.
+            // This prevents race conditions where canSendMessage() might check
+            // state between the async dispatch and cleanup completion.
+            if let server = self.serverLookup?(serverID) {
+                // Only update if we think we're still connected/connecting.
+                // If already in a disconnect-related state, don't overwrite it.
+                if server.connectionStatus == .connected || server.connectionStatus == .connecting {
+                    server.connectionStatus = .disconnected
+                }
+            }
+
             // Clean up all monitoring and timers for this server
             self.pingTasks[serverID]?.cancel()
             self.pingTasks.removeValue(forKey: serverID)
@@ -501,7 +527,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             self.clients.removeValue(forKey: serverID)
             self.selfNicks.removeValue(forKey: serverID)
 
-            // Notify delegate so it can update server state and trigger reconnection if needed
+            // Notify delegate so it can trigger reconnection if needed
             self.delegate?.ircConnectionService(self, serverDidDisconnect: serverID)
         }
     }
