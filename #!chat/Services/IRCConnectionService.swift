@@ -191,9 +191,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     func scheduleReconnection(for server: IRCServer) {
         let policy = ReconnectionManager.Policy(
             maxAttempts: server.maxReconnectionAttempts,
-            baseDelay: server.reconnectionDelay,
-            maxDelay: 60.0,
-            backoffMultiplier: 2.0
+            retryInterval: server.reconnectionDelay
         )
         reconnectionManager.scheduleReconnection(for: server.id, policy: policy)
     }

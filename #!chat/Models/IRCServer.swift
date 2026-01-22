@@ -29,7 +29,7 @@ final class IRCServer: Identifiable, Hashable {
     var lastConnectionAttempt: Date?
     var reconnectionAttempts: Int = 0
     var maxReconnectionAttempts: Int = 5
-    var reconnectionDelay: TimeInterval = 5.0
+    var reconnectionDelay: TimeInterval = 10.0
     var shouldAutoReconnect: Bool = true
     
     enum ConnectionStatus {

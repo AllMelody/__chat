@@ -10,15 +10,11 @@ final class ReconnectionManager {
 
     struct Policy {
         let maxAttempts: Int
-        let baseDelay: TimeInterval
-        let maxDelay: TimeInterval
-        let backoffMultiplier: Double
+        let retryInterval: TimeInterval  // Used for attempts after the first
 
         static let `default` = Policy(
             maxAttempts: 5,
-            baseDelay: 5.0,
-            maxDelay: 60.0,
-            backoffMultiplier: 2.0
+            retryInterval: 10.0
         )
     }
 
@@ -50,23 +46,24 @@ final class ReconnectionManager {
             return false
         }
 
-        // Calculate delay with exponential backoff
-        let delay = min(
-            policy.baseDelay * pow(policy.backoffMultiplier, Double(attempt - 1)),
-            policy.maxDelay
-        )
+        // First attempt is immediate, subsequent attempts use the retry interval
+        let delay: TimeInterval = (attempt == 1) ? 0 : policy.retryInterval
 
         // Notify delegate about scheduled reconnection
         delegate?.reconnectionManager(self, didScheduleReconnect: serverID, attempt: attempt, delay: delay)
 
-        // Schedule the timer
-        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                self.delegate?.reconnectionManager(self, shouldReconnect: serverID)
+        // For immediate reconnection, call directly; otherwise schedule a timer
+        if delay == 0 {
+            delegate?.reconnectionManager(self, shouldReconnect: serverID)
+        } else {
+            let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    self.delegate?.reconnectionManager(self, shouldReconnect: serverID)
+                }
             }
+            timers[serverID] = timer
         }
-        timers[serverID] = timer
 
         return true
     }
