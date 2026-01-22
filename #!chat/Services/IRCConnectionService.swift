@@ -51,13 +51,22 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
     // MARK: - Network Monitoring
 
+    private var networkWasUnavailable = false
+
     private func setupNetworkMonitoring() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard let self = self else { return }
 
-            if path.status == .unsatisfied || path.status == .requiresConnection {
-                // Network is down - immediately disconnect all servers
-                DispatchQueue.main.async {
+            DispatchQueue.main.async {
+                if path.status == .satisfied {
+                    // Network is available - reconnect servers if we previously lost network
+                    if self.networkWasUnavailable {
+                        self.networkWasUnavailable = false
+                        self.handleNetworkRestored()
+                    }
+                } else {
+                    // Network is down - immediately disconnect all servers
+                    self.networkWasUnavailable = true
                     self.handleNetworkLoss()
                 }
             }
@@ -70,22 +79,29 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         let connectedServerIDs = Array(clients.keys)
 
         for serverID in connectedServerIDs {
-            // Update server state IMMEDIATELY before cleanup.
-            // This prevents race conditions where UI thinks we're still connected.
+            // Cancel any pending reconnection - no point retrying without network
+            reconnectionManager.cancelReconnection(for: serverID)
+
+            // Update server state and close connection
             if let server = serverLookup?(serverID) {
                 if server.connectionStatus == .connected || server.connectionStatus == .connecting {
                     server.connectionStatus = .disconnected
                 }
+
+                let msg = ChatMessage(time: Date(), text: "Network unavailable")
+                server.log.append(msg)
+                delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
             }
 
-            // Close the client and notify delegate
+            // Close the client
             if let client = clients.removeValue(forKey: serverID) {
                 client.close()
             }
-
-            // Notify delegate - this will trigger reconnection logic in ChatStore
-            delegate?.ircConnectionService(self, serverDidDisconnect: serverID)
         }
+    }
+
+    private func handleNetworkRestored() {
+        delegate?.ircConnectionServiceNetworkDidBecomeAvailable(self)
     }
 
     // MARK: - Connection Management
@@ -759,6 +775,7 @@ enum MessageTargetType {
 protocol IRCConnectionServiceDelegate: AnyObject {
     func ircConnectionService(_ service: IRCConnectionService, didAppendMessage message: ChatMessage, to server: IRCServer)
     func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID)
+    func ircConnectionServiceNetworkDidBecomeAvailable(_ service: IRCConnectionService)
     func ircConnectionService(_ service: IRCConnectionService, serverDidRegister serverID: UUID, as nick: String)
     func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID)
     func ircConnectionService(_ service: IRCConnectionService, server serverID: UUID, connectionStateChanged state: IRCClient.ConnectionState)

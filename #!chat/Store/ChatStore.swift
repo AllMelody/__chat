@@ -182,7 +182,21 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             scanMessageForThumbnails(message)
         }
     }
-    
+
+    func ircConnectionServiceNetworkDidBecomeAvailable(_ service: IRCConnectionService) {
+        // Reconnect all servers that should auto-reconnect and are currently disconnected
+        for server in servers {
+            let isDisconnected = server.connectionStatus == .disconnected ||
+                                 server.connectionStatus == .connectionTimeout ||
+                                 server.connectionStatus == .reconnectionFailed
+            if server.shouldAutoReconnect && isDisconnected {
+                server.log.append(ChatMessage(time: Date(), text: "Network available, reconnecting..."))
+                connectionService.resetReconnectionAttempts(for: server)
+                connect(server)
+            }
+        }
+    }
+
     // MARK: - MessageRouterDelegate
     
     func messageRouter(_ router: MessageRouter, didAppendMessage message: ChatMessage) {
