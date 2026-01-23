@@ -94,32 +94,12 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .navigateDown)) { _ in
                 navigateDown()
             }
-        
 
-        let viewWithKeyHandling = viewWithStateChanges
-            .onKeyPress(keys: [.upArrow], phases: .down) { keyPress in
-                if keyPress.modifiers.contains(.command) {
-                    print("Command + Up Arrow pressed")
-                    navigateUp()
-                    return .handled // Indicate that the event was handled
-                }
-                return .ignored // Let other handlers process if not Command + Up Arrow
-            }
-            .onKeyPress(keys: [.downArrow], phases: .down) { keyPress in
-                if keyPress.modifiers.contains(.command) {
-                    print("Command + Down Arrow pressed")
-                    navigateDown()
-                    return .handled
-                }
-                return .ignored
-            }
-
-        
         let addServerBinding = Binding(get: { model.isPresentingAddServer }, set: { model.isPresentingAddServer = $0 })
         let joinChannelBinding = Binding(get: { model.isPresentingJoinChannel }, set: { model.isPresentingJoinChannel = $0 })
         let editServerBinding = Binding(get: { model.isPresentingEditServer }, set: { model.isPresentingEditServer = $0 })
-        
-        return viewWithKeyHandling
+
+        return viewWithStateChanges
             .sheet(isPresented: addServerBinding) { ServerEditorView() }
             .sheet(isPresented: joinChannelBinding) { JoinChannelView() }
             .sheet(isPresented: editServerBinding) {
