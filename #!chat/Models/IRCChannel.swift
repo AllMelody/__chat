@@ -11,6 +11,7 @@ final class IRCChannel: Identifiable, Hashable {
     var users: [String] = []
     var log: [ChatMessage] = []
     var unreadCount: Int = 0
+    var joined: Bool = false
 
     init(name: String) { self.name = name }
 

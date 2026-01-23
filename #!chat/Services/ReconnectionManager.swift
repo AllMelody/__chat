@@ -81,28 +81,12 @@ final class ReconnectionManager {
         policies.removeValue(forKey: serverID)
     }
 
-    /// Cancel reconnection and reset attempts.
-    func reset(for serverID: UUID) {
-        cancelReconnection(for: serverID)
-        resetAttempts(for: serverID)
-    }
-
     /// Cancel all pending reconnections.
     func cancelAll() {
         for timer in timers.values {
             timer.invalidate()
         }
         timers.removeAll()
-    }
-
-    /// Get the current attempt count for a server.
-    func currentAttempt(for serverID: UUID) -> Int {
-        attempts[serverID] ?? 0
-    }
-
-    /// Check if a reconnection is scheduled for the given server.
-    func isReconnectionScheduled(for serverID: UUID) -> Bool {
-        timers[serverID] != nil
     }
 
     deinit {

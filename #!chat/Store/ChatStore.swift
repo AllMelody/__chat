@@ -135,7 +135,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     /// Check if we can actually send messages to the given selection.
-    /// This checks both the observable connection status AND the underlying client state.
+    /// This checks connection status, client state, and channel join confirmation.
     func canSendMessage(to selectionID: UUID?) -> Bool {
         guard let server = serverForSelection(selectionID) else { return false }
 
@@ -144,7 +144,14 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         // Then verify the client actually exists and is registered
         guard let client = connectionService.clients[server.id] else { return false }
-        return client.canSend
+        guard client.canSend else { return false }
+
+        // If a channel is selected, only allow sending after the server confirmed our JOIN
+        if let channel = server.channels.first(where: { $0.id == selectionID }) {
+            return channel.joined
+        }
+
+        return true
     }
     
     // MARK: - Persistence
@@ -205,7 +212,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     
     func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
-        
+
         connectionService.cancelConnectionTimeout(for: server)
         
         // Always update state on disconnect - the delegate is only called for unexpected disconnects
@@ -237,6 +244,11 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         
         connectionService.resetReconnectionAttempts(for: server)  // Reset reconnection counter on successful connection
         server.shouldAutoReconnect = true // Re-enable auto-reconnect for future disconnections
+
+        // Rejoin any channels that were open before disconnect
+        for channel in server.channels {
+            connectionService.joinChannel(channel.name, on: server)
+        }
 
         // Start ping monitoring for this connection
         connectionService.startPingMonitoring(for: server)
@@ -299,9 +311,9 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         case .channel(let name, let isMine):
             let channel = server.getOrCreateChannel(named: name)
-            
+
             // Improved duplicate detection
-            let isDuplicate = channel.log.last?.senderNick == message.senderNick && 
+            let isDuplicate = channel.log.last?.senderNick == message.senderNick &&
                             channel.log.last?.text == message.text &&
                             Date().timeIntervalSince(channel.log.last?.time ?? Date.distantPast) < 1.0
             if !isDuplicate {
@@ -335,21 +347,26 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         channelObj.addUserIfNotPresent(nick)
 
         if isSelf {
+            channelObj.joined = true
             let message = ChatMessage(time: Date(), text: "Joined \(channel)")
+            channelObj.log.append(message)
             server.log.append(message)
-            scanMessageForThumbnails(message)
         }
     }
-    
+
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, leftChannel channel: String, on serverID: UUID, isSelf: Bool) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
         if isSelf {
-            server.channels.removeAll { $0.name == channel }
+            if let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) {
+                let message = ChatMessage(time: Date(), text: "Parted \(channel)")
+                channelObj.log.append(message)
+                channelObj.joined = false
+            }
+            server.channels.removeAll { $0.name.caseInsensitiveCompare(channel) == .orderedSame }
             let message = ChatMessage(time: Date(), text: "Parted \(channel)")
             server.log.append(message)
-            scanMessageForThumbnails(message)
-        } else if let channelObj = server.channels.first(where: { $0.name == channel }) {
+        } else if let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) {
             channelObj.removeUser(nick)
         }
     }

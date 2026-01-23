@@ -26,7 +26,6 @@ final class IRCServer: Identifiable, Hashable {
     var isConnected: Bool {
         connectionStatus == .connected
     }
-    var lastConnectionAttempt: Date?
     var reconnectionAttempts: Int = 0
     var maxReconnectionAttempts: Int = 5
     var reconnectionDelay: TimeInterval = 10.0

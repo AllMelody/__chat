@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NIO
 import Network
@@ -31,13 +32,19 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         self.serverLookup = lookup
     }
 
+    private var sleepObserver: Any?
+    private var wakeObserver: Any?
+
     init() {
         setupNetworkMonitoring()
+        setupSleepWakeMonitoring()
         reconnectionManager.delegate = self
     }
 
     deinit {
         pathMonitor.cancel()
+        if let obs = sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
+        if let obs = wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
         // Clean up all timers
         for timer in connectionTimers.values {
             timer.invalidate()
@@ -47,6 +54,54 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             task.cancel()
         }
         // Reconnection manager cleans up in its own deinit
+    }
+
+    // MARK: - Sleep/Wake Monitoring
+
+    private func setupSleepWakeMonitoring() {
+        let center = NSWorkspace.shared.notificationCenter
+
+        sleepObserver = center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.handleSleep()
+        }
+
+        wakeObserver = center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.handleWake()
+        }
+    }
+
+    private func handleSleep() {
+        // Tear down all connections immediately before the system sleeps.
+        // No waiting for server responses - just close the sockets.
+        let connectedServerIDs = Array(clients.keys)
+
+        for serverID in connectedServerIDs {
+            reconnectionManager.cancelReconnection(for: serverID)
+            pingTasks[serverID]?.cancel()
+            pingTasks.removeValue(forKey: serverID)
+            lastPongReceived.removeValue(forKey: serverID)
+            connectionTimers[serverID]?.invalidate()
+            connectionTimers.removeValue(forKey: serverID)
+
+            if let server = serverLookup?(serverID) {
+                if server.connectionStatus == .connected || server.connectionStatus == .connecting {
+                    server.connectionStatus = .disconnected
+                }
+                for channel in server.channels {
+                    channel.joined = false
+                }
+            }
+
+            if let client = clients.removeValue(forKey: serverID) {
+                client.close()
+            }
+            selfNicks.removeValue(forKey: serverID)
+        }
+    }
+
+    private func handleWake() {
+        // After waking, reconnect all servers that should auto-reconnect.
+        delegate?.ircConnectionServiceNetworkDidBecomeAvailable(self)
     }
 
     // MARK: - Network Monitoring
@@ -88,6 +143,11 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
                     server.connectionStatus = .disconnected
                 }
 
+                // Mark all channels as not joined
+                for channel in server.channels {
+                    channel.joined = false
+                }
+
                 let msg = ChatMessage(time: Date(), text: "Network unavailable")
                 server.log.append(msg)
                 delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
@@ -107,10 +167,11 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     // MARK: - Connection Management
     
     func connect(_ server: IRCServer) {
-        guard server.connectionStatus != .connecting && server.connectionStatus != .connected else { return }
+        guard server.connectionStatus != .connecting && server.connectionStatus != .connected else {
+            return
+        }
         
         server.connectionStatus = .connecting
-        server.lastConnectionAttempt = Date()
         
         let statusText = server.reconnectionAttempts > 0 ? 
             "Reconnecting to \(server.name) (attempt \(server.reconnectionAttempts + 1)/\(server.maxReconnectionAttempts))" :
@@ -527,6 +588,11 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
                 if server.connectionStatus == .connected || server.connectionStatus == .connecting {
                     server.connectionStatus = .disconnected
                 }
+
+                // Mark all channels as not joined
+                for channel in server.channels {
+                    channel.joined = false
+                }
             }
 
             // Clean up all monitoring and timers for this server
@@ -632,7 +698,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     func client(_ client: IRCClient, user: IRCUserID, joined channels: [IRCChannelName]) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
-            
+
             for ch in channels {
                 let name = ch.stringValue
                 let nick = user.nick.stringValue
@@ -718,8 +784,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
                 self.updateLastPongReceived(for: serverID)
             }
         case .otherCommand("CAP", let args):
-            let capMsg = "📥 CAP Response: \(args.joined(separator: " "))"
-            print("📥 Received CAP: \(args)")
+            let capMsg = "CAP Response: \(args.joined(separator: " "))"
             DispatchQueue.main.async { [weak self] in
                 guard let self, let serverID = self.serverID(for: client) else { return }
                 let m = ChatMessage(time: Date(), text: capMsg)
