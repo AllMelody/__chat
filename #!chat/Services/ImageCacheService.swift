@@ -4,7 +4,10 @@ import CryptoKit
 
 final class ImageCacheService {
     // In-memory thumbnails keyed by ChatMessage.id
-    var messageThumbnails: [UUID: [MessageThumbnail]] = [:]
+    private var messageThumbnails: [UUID: [MessageThumbnail]] = [:]
+
+    // Called on the main thread whenever thumbnails change for a message
+    var onThumbnailUpdated: ((UUID, [MessageThumbnail]) -> Void)?
     
     // Image cache using native macOS APIs
     private let imageCache = NSCache<NSString, NSImage>()
@@ -141,7 +144,7 @@ final class ImageCacheService {
     }
     
     // MARK: - Thumbnail Processing
-    
+
     func scanMessageForThumbnails(_ message: ChatMessage, showImageThumbnails: Bool) {
         guard showImageThumbnails else { return }
         guard let detector = linkDetector else { return }
@@ -153,12 +156,32 @@ final class ImageCacheService {
             guard let u = result?.url, ["http", "https"].contains(u.scheme?.lowercased() ?? "") else { return }
             let key = u.absoluteString
             if seen.insert(key).inserted {
-                // If cache indicates image, add placeholder immediately; otherwise probe via HEAD
-                if let cached = self.linkCache[key], cached.contentType.lowercased().hasPrefix("image/") {
+                // YouTube: we know the thumbnail URL without a HEAD request
+                if let ytThumbURL = self.youTubeThumbnailURL(for: u) {
+                    if let cachedImage = self.cachedImage(for: key) {
+                        var list = self.messageThumbnails[message.id] ?? []
+                        if let idx = list.firstIndex(where: { $0.url == key }) {
+                            list[idx].image = cachedImage
+                        } else {
+                            list.append(MessageThumbnail(url: key, image: cachedImage))
+                        }
+                        self.messageThumbnails[message.id] = list
+                        self.onThumbnailUpdated?(message.id, list)
+                    } else {
+                        var list = self.messageThumbnails[message.id] ?? []
+                        if !list.contains(where: { $0.url == key }) {
+                            list.append(MessageThumbnail(url: key, image: nil))
+                            self.messageThumbnails[message.id] = list
+                            self.onThumbnailUpdated?(message.id, list)
+                        }
+                        self.fetchImage(urlString: ytThumbURL, messageID: message.id, displayURL: key)
+                    }
+                } else if let cached = self.linkCache[key], cached.contentType.lowercased().hasPrefix("image/") {
                     var list = self.messageThumbnails[message.id] ?? []
                     if !list.contains(where: { $0.url == key }) {
                         list.append(MessageThumbnail(url: key, image: nil))
                         self.messageThumbnails[message.id] = list
+                        self.onThumbnailUpdated?(message.id, list)
                     }
                     self.fetchThumbnailIfNeeded(for: key, messageID: message.id)
                 } else {
@@ -166,6 +189,26 @@ final class ImageCacheService {
                 }
             }
         }
+    }
+
+    /// Extracts a YouTube thumbnail URL from a youtube.com or youtu.be link.
+    private func youTubeThumbnailURL(for url: URL) -> String? {
+        let host = url.host?.lowercased() ?? ""
+        var videoID: String?
+
+        if host == "youtu.be" || host == "www.youtu.be" {
+            videoID = url.pathComponents.dropFirst().first
+        } else if host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com" {
+            if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let v = components.queryItems?.first(where: { $0.name == "v" })?.value {
+                videoID = v
+            } else if url.pathComponents.count >= 3 && url.pathComponents[1] == "shorts" {
+                videoID = url.pathComponents[2]
+            }
+        }
+
+        guard let id = videoID, !id.isEmpty else { return nil }
+        return "https://i.ytimg.com/vi/\(id)/hqdefault.jpg"
     }
     
     private func fetchThumbnailIfNeeded(for urlString: String, messageID: UUID) {
@@ -179,6 +222,7 @@ final class ImageCacheService {
                     list.append(MessageThumbnail(url: urlString, image: cachedImage))
                 }
                 self.messageThumbnails[messageID] = list
+                self.onThumbnailUpdated?(messageID, list)
             }
             return
         }
@@ -204,11 +248,11 @@ final class ImageCacheService {
             DispatchQueue.main.async {
                 self.linkCache[urlString] = LinkCacheEntry(contentType: ct, lastChecked: Date())
                 if ct.lowercased().hasPrefix("image/") {
-                    // Add placeholder now that we know it's an image
                     var list = self.messageThumbnails[messageID] ?? []
                     if !list.contains(where: { $0.url == urlString }) {
                         list.append(MessageThumbnail(url: urlString, image: nil))
                         self.messageThumbnails[messageID] = list
+                        self.onThumbnailUpdated?(messageID, list)
                     }
                     self.fetchImage(urlString: urlString, messageID: messageID)
                 }
@@ -217,65 +261,52 @@ final class ImageCacheService {
         task.resume()
     }
     
-    private func fetchImage(urlString: String, messageID: UUID) {
+    /// Fetches an image from `urlString` and stores the result.
+    /// `displayURL` overrides the URL used for caching and click targets (e.g. YouTube video URL
+    /// when fetching from i.ytimg.com). If nil, `urlString` is used for both.
+    private func fetchImage(urlString: String, messageID: UUID, displayURL: String? = nil) {
+        let cacheKey = displayURL ?? urlString
         guard let url = URL(string: urlString) else { return }
-        
+
         var request = URLRequest(url: url)
         request.timeoutInterval = 30.0
-        
+
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, resp, error in
             guard let self else { return }
-            
+
             if let error = error {
                 print("Image fetch failed for \(urlString): \(error)")
                 return
             }
-            
-            guard let data = data, !data.isEmpty else {
-                print("Empty data for image: \(urlString)")
-                return
-            }
-            
-            // Limit image size to prevent memory issues
-            guard data.count < 10 * 1024 * 1024 else { // 10MB limit
-                print("Image too large: \(urlString) (\(data.count) bytes)")
-                return
-            }
-            
-            // Generate higher resolution thumbnail for retina displays
+
+            guard let data = data, !data.isEmpty else { return }
+            guard data.count < 10 * 1024 * 1024 else { return }
+
             let cfData = data as CFData
-            guard let src = CGImageSourceCreateWithData(cfData, nil) else { 
-                print("Failed to create image source for: \(urlString)")
-                return 
-            }
-            
-            // Use higher max pixel size to account for retina displays (200 logical * 2-3x scale)
-            let maxPixelSize = 600  // This allows for crisp display at up to 3x retina scaling
+            guard let src = CGImageSourceCreateWithData(cfData, nil) else { return }
+
+            let maxPixelSize = 600
             let opts: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
             ]
-            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { 
-                print("Failed to create thumbnail for: \(urlString)")
-                return 
-            }
-            
-            // Create NSImage with logical size (not pixel size) for proper retina handling
+            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return }
+
             let pixelSize = NSSize(width: cg.width, height: cg.height)
             let img = NSImage(cgImage: cg, size: pixelSize)
-            
-            // Cache the image for future use
-            self.cacheImage(img, for: urlString)
-            
+
+            self.cacheImage(img, for: cacheKey)
+
             DispatchQueue.main.async {
                 var arr = self.messageThumbnails[messageID] ?? []
-                if let idx = arr.firstIndex(where: { $0.url == urlString }) {
+                if let idx = arr.firstIndex(where: { $0.url == cacheKey }) {
                     arr[idx].image = img
                 } else {
-                    arr.append(MessageThumbnail(url: urlString, image: img))
+                    arr.append(MessageThumbnail(url: cacheKey, image: img))
                 }
                 self.messageThumbnails[messageID] = arr
+                self.onThumbnailUpdated?(messageID, arr)
             }
         }
         task.resume()

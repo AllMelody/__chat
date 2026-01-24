@@ -117,7 +117,7 @@ struct ContentView: View {
     // MARK: - Left Pane
     private var leftPane: some View {
         VStack(spacing: 0) {
-            LogView(selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
+            LogView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
                 .padding(.leading, 4)
                 .padding(.bottom, 4)
             Divider()
@@ -266,19 +266,21 @@ struct ContentView: View {
 // MARK: - Log View (NSTextView wrapper)
 
 struct LogView: View {
+    let logVersion: Int
     let selectionToken: UUID?
     let messages: [ChatMessage]
     let thumbnailsByMessage: [UUID: [MessageThumbnail]]
     let showThumbnails: Bool
     let myNick: String?
-    
+
     var body: some View {
-        LogTextView(selectionToken: selectionToken, messages: messages, thumbnailsByMessage: thumbnailsByMessage, showThumbnails: showThumbnails, myNick: myNick)
+        LogTextView(logVersion: logVersion, selectionToken: selectionToken, messages: messages, thumbnailsByMessage: thumbnailsByMessage, showThumbnails: showThumbnails, myNick: myNick)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 private struct LogTextView: NSViewRepresentable {
+    let logVersion: Int
     let selectionToken: UUID?
     let messages: [ChatMessage]
     let thumbnailsByMessage: [UUID: [MessageThumbnail]]
@@ -361,9 +363,9 @@ private struct LogTextView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
 
-        // Optimized signature calculation
         let signature: Int = {
             var hash = messages.count
+            hash = hash &* 31 &+ logVersion
             hash = hash &* 31 &+ (selectionToken?.hashValue ?? 0)
             
             // Only calculate hash for visible messages if there are many

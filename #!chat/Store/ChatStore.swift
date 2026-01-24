@@ -10,9 +10,16 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     
     // Core data
     var servers: [IRCServer] = [] { didSet { persistServers() } }
-    
+
     // Selection (server or channel id)
     var selectedNodeID: UUID? = nil
+
+    // Thumbnail data - stored here so @Observable triggers view updates
+    var messageThumbnails: [UUID: [MessageThumbnail]] = [:]
+
+    // Bumped on every log mutation to guarantee view invalidation.
+    // Works as a safety net when @Observable tracking breaks after sleep/wake.
+    var logVersion: Int = 0
     
     // UI state
     var isPresentingAddServer: Bool = false
@@ -40,14 +47,13 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             self?.servers.first { $0.id == serverID }
         }
         messageRouter.delegate = self
+        imageCache.onThumbnailUpdated = { [weak self] messageID, thumbnails in
+            self?.messageThumbnails[messageID] = thumbnails
+        }
     }
     
     // MARK: - Thumbnails
-    
-    var messageThumbnails: [UUID: [MessageThumbnail]] {
-        imageCache.messageThumbnails
-    }
-    
+
     func scanMessageForThumbnails(_ message: ChatMessage) {
         imageCache.scanMessageForThumbnails(message, showImageThumbnails: preferences?.showImageThumbnails ?? false)
     }
@@ -76,6 +82,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func closePrivateMessage(_ pm: IRCPrivateMessage, from server: IRCServer) {
         server.privateMessages.removeAll { $0.id == pm.id }
         server.log.append(ChatMessage(time: Date(), text: "Closed conversation with \(pm.nickname)"))
+        logVersion &+= 1
     }
     
     // MARK: - Messaging
@@ -183,8 +190,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     // MARK: - IRCConnectionServiceDelegate
     
     func ircConnectionService(_ service: IRCConnectionService, didAppendMessage message: ChatMessage, to server: IRCServer) {
-        // Only scan for thumbnails if this is an actual chat message (not server status messages)
-        // Server status messages create noise from IRC hostmasks being detected as URLs
+        logVersion &+= 1
         if message.isPrivmsg {
             scanMessageForThumbnails(message)
         }
@@ -198,6 +204,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
                                  server.connectionStatus == .reconnectionFailed
             if server.shouldAutoReconnect && isDisconnected {
                 server.log.append(ChatMessage(time: Date(), text: "Network available, reconnecting..."))
+                logVersion &+= 1
                 connectionService.resetReconnectionAttempts(for: server)
                 connect(server)
             }
@@ -205,8 +212,9 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     // MARK: - MessageRouterDelegate
-    
+
     func messageRouter(_ router: MessageRouter, didAppendMessage message: ChatMessage) {
+        logVersion &+= 1
         scanMessageForThumbnails(message)
     }
     
@@ -214,13 +222,11 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
-        
-        // Always update state on disconnect - the delegate is only called for unexpected disconnects
-        // Manual disconnects go through IRCConnectionService.disconnect() which sets state directly
+
         server.connectionStatus = .connectionTimeout
         server.log.append(ChatMessage(time: Date(), text: "Connection to \(server.name) lost"))
+        logVersion &+= 1
 
-        // Attempt reconnection if enabled
         if server.shouldAutoReconnect {
             connectionService.scheduleReconnection(for: server)
         }
@@ -229,28 +235,24 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func ircConnectionService(_ service: IRCConnectionService, serverDidRegister serverID: UUID, as nick: String) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
-        // Cancel timeout timer since we successfully connected
         connectionService.cancelConnectionTimeout(for: server)
-
-        // Note: connectionStatus is now updated via connectionStateChanged callback
         server.currentNick = nick
-        
-        let statusText = server.reconnectionAttempts > 0 ? 
-            "Reconnected as \(nick)" : 
+
+        let statusText = server.reconnectionAttempts > 0 ?
+            "Reconnected as \(nick)" :
             "Registered as \(nick)"
         let message = ChatMessage(time: Date(), text: statusText)
         server.log.append(message)
+        logVersion &+= 1
         scanMessageForThumbnails(message)
-        
-        connectionService.resetReconnectionAttempts(for: server)  // Reset reconnection counter on successful connection
-        server.shouldAutoReconnect = true // Re-enable auto-reconnect for future disconnections
 
-        // Rejoin any channels that were open before disconnect
+        connectionService.resetReconnectionAttempts(for: server)
+        server.shouldAutoReconnect = true
+
         for channel in server.channels {
             connectionService.joinChannel(channel.name, on: server)
         }
 
-        // Start ping monitoring for this connection
         connectionService.startPingMonitoring(for: server)
     }
     
@@ -259,12 +261,11 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         connectionService.cancelConnectionTimeout(for: server)
 
-        // Note: connectionStatus is now updated via connectionStateChanged callback
         let message = ChatMessage(time: Date(), text: "Failed to register with server")
         server.log.append(message)
+        logVersion &+= 1
         scanMessageForThumbnails(message)
 
-        // Attempt reconnection if enabled
         if server.shouldAutoReconnect {
             connectionService.scheduleReconnection(for: server)
         }
@@ -294,25 +295,24 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
     func ircConnectionService(_ service: IRCConnectionService, serverDidChangeNick serverID: UUID, to nick: String) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
-        
+
         server.currentNick = nick
         let message = ChatMessage(time: Date(), text: "You are now known as \(nick)")
         server.log.append(message)
+        logVersion &+= 1
         scanMessageForThumbnails(message)
     }
     
     func ircConnectionService(_ service: IRCConnectionService, didReceiveMessage message: ChatMessage, for serverID: UUID, target: MessageTargetType) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
-        
+
         switch target {
         case .server:
             server.log.append(message)
-            // Don't scan server log for thumbnails - creates noise from IRC server hostmasks
 
         case .channel(let name, let isMine):
             let channel = server.getOrCreateChannel(named: name)
 
-            // Improved duplicate detection
             let isDuplicate = channel.log.last?.senderNick == message.senderNick &&
                             channel.log.last?.text == message.text &&
                             Date().timeIntervalSince(channel.log.last?.time ?? Date.distantPast) < 1.0
@@ -320,24 +320,21 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
                 channel.log.append(message)
                 scanMessageForThumbnails(message)
             }
-            
+
             if !isMine, selectedNodeID != channel.id {
                 channel.unreadCount += 1
             }
-            
+
         case .privateMessage(let senderNick):
-            // Find or create private message conversation
             let pm = server.getOrCreatePrivateMessage(with: senderNick)
-            
-            // Add the message
             pm.log.append(message)
             scanMessageForThumbnails(message)
-            
-            // Mark as unread if not currently selected
+
             if selectedNodeID != pm.id {
                 pm.unreadCount += 1
             }
         }
+        logVersion &+= 1
     }
     
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool) {
@@ -351,6 +348,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             let message = ChatMessage(time: Date(), text: "Joined \(channel)")
             channelObj.log.append(message)
             server.log.append(message)
+            logVersion &+= 1
         }
     }
 
@@ -366,6 +364,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             server.channels.removeAll { $0.name.caseInsensitiveCompare(channel) == .orderedSame }
             let message = ChatMessage(time: Date(), text: "Parted \(channel)")
             server.log.append(message)
+            logVersion &+= 1
         } else if let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) {
             channelObj.removeUser(nick)
         }
@@ -391,29 +390,27 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
-        // Update the nick in ALL channels on this server
         for channel in server.channels {
             channel.updateUserNick(from: oldNick, to: newNick)
         }
 
-        // Log the nick change to the server log
         let message = ChatMessage(time: Date(), text: "\(oldNick) is now known as \(newNick)")
         server.log.append(message)
+        logVersion &+= 1
         scanMessageForThumbnails(message)
     }
 
     func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
-        // Remove the user from ALL channels on this server (QUIT = left the entire server)
         for channel in server.channels {
             channel.removeUser(nick)
         }
 
-        // Log the quit to the server log
         let quitText = message.map { " (\($0))" } ?? ""
         let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")
         server.log.append(logMessage)
+        logVersion &+= 1
         scanMessageForThumbnails(logMessage)
     }
 }
