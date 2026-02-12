@@ -390,27 +390,42 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
+        let nickMessage = ChatMessage(time: Date(), text: "\(oldNick) is now known as \(newNick)")
+
+        // Update nick in channels and log where the user is present
         for channel in server.channels {
-            channel.updateUserNick(from: oldNick, to: newNick)
+            if channel.hasUser(oldNick) {
+                channel.updateUserNick(from: oldNick, to: newNick)
+                channel.log.append(nickMessage)
+            }
         }
 
-        let message = ChatMessage(time: Date(), text: "\(oldNick) is now known as \(newNick)")
-        server.log.append(message)
+        // Update nick in PM conversations so messages go to the right target
+        if let pm = server.privateMessages.first(where: { $0.nickname.caseInsensitiveCompare(oldNick) == .orderedSame }) {
+            pm.nickname = newNick
+            pm.log.append(nickMessage)
+        }
+
+        server.log.append(nickMessage)
         logVersion &+= 1
-        scanMessageForThumbnails(message)
     }
 
     func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?) {
         guard let server = servers.first(where: { $0.id == serverID }) else { return }
 
+        let quitText = message.map { " (\($0))" } ?? ""
+        let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")
+
         for channel in server.channels {
             channel.removeUser(nick)
         }
 
-        let quitText = message.map { " (\($0))" } ?? ""
-        let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")
+        // Log quit in PM conversation so the user knows their DM partner left
+        if let pm = server.privateMessages.first(where: { $0.nickname.caseInsensitiveCompare(nick) == .orderedSame }) {
+            pm.log.append(logMessage)
+        }
+
         server.log.append(logMessage)
         logVersion &+= 1
-        scanMessageForThumbnails(logMessage)
     }
 }
