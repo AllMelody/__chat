@@ -3,6 +3,8 @@ import SwiftUI
 extension Notification.Name {
     static let navigateUp = Notification.Name("navigateUp")
     static let navigateDown = Notification.Name("navigateDown")
+    static let composerSubmit = Notification.Name("composerSubmit")
+    static let composerFocus = Notification.Name("composerFocus")
 }
 
 @main
@@ -13,6 +15,11 @@ struct ChatApp: App {
     init() { 
         self.model = ChatStore()
         model.preferences = preferences 
+    }
+
+    private var isChannelSelected: Bool {
+        guard let id = model.selectedNodeID else { return false }
+        return model.servers.contains { $0.channels.contains { $0.id == id } }
     }
 
     var body: some Scene {
@@ -33,6 +40,14 @@ struct ChatApp: App {
                     .keyboardShortcut(.delete, modifiers: [.command])
                 }
                 
+                CommandMenu("Channel") {
+                    Button("Show Topic...") {
+                        model.isPresentingTopicEditor = true
+                    }
+                    .keyboardShortcut("t", modifiers: [.command])
+                    .disabled(!isChannelSelected)
+                }
+
                 CommandMenu("Navigation") {
                     Button("Previous Item") { 
                         // Send notification that ContentView will observe

@@ -418,6 +418,18 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         server.log.append(ChatMessage(time: Date(), text: "Parted \(channel.name)"))
     }
     
+    // MARK: - Topic
+
+    func sendTopicChange(_ newTopic: String, for channelName: String, on server: IRCServer) {
+        guard let client = clients[server.id], client.canSend else { return }
+        client.send(.otherCommand("TOPIC", [channelName, newTopic]))
+    }
+
+    func requestTopic(for channelName: String, on server: IRCServer) {
+        guard let client = clients[server.id], client.canSend else { return }
+        client.send(.otherCommand("TOPIC", [channelName]))
+    }
+
     // MARK: - Messaging
 
     /// Send a message to an arbitrary nick or channel (used by /msg command)
@@ -749,6 +761,13 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
+    func client(_ client: IRCClient, changeTopic topic: String, of channel: IRCChannelName) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let serverID = self.serverID(for: client) else { return }
+            self.delegate?.ircConnectionService(self, didReceiveTopicChange: topic, for: channel.stringValue, on: serverID, changedBy: nil)
+        }
+    }
+
     func client(_ client: IRCClient, received message: IRCMessage) {
         let readable = formatIRCMessage(message, direction: "RECV")
         DispatchQueue.main.async { [weak self] in
@@ -805,6 +824,23 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
                 guard let self, let serverID = self.serverID(for: client) else { return }
                 self.delegate?.ircConnectionService(self, didReceiveUserList: cleaned, for: channelName, on: serverID)
             }
+        case .otherCommand("TOPIC", let args):
+            // Live topic change: :nick!user@host TOPIC #channel :new topic
+            guard args.count >= 2 else { break }
+            let channelName = args[0]
+            let newTopic = args[1]
+            let nick: String? = {
+                guard let origin = message.origin else { return nil }
+                // origin is "nick!user@host" — extract nick
+                if let bang = origin.firstIndex(of: "!") {
+                    return String(origin[origin.startIndex..<bang])
+                }
+                return origin
+            }()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let serverID = self.serverID(for: client) else { return }
+                self.delegate?.ircConnectionService(self, didReceiveTopicChange: newTopic, for: channelName, on: serverID, changedBy: nick)
+            }
         case .numeric(.replyEndOfNames, _):
             break
         case .numeric(.replyWhoReply, let args):
@@ -852,4 +888,5 @@ protocol IRCConnectionServiceDelegate: AnyObject {
     func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?)
     func ircConnectionService(_ service: IRCConnectionService, didReceiveUserList users: [String], for channel: String, on serverID: UUID)
     func ircConnectionService(_ service: IRCConnectionService, didReceiveWhoReply nick: String, for channel: String, on serverID: UUID)
+    func ircConnectionService(_ service: IRCConnectionService, didReceiveTopicChange topic: String, for channel: String, on serverID: UUID, changedBy nick: String?)
 }

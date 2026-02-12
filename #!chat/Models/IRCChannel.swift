@@ -8,6 +8,7 @@ final class IRCChannel: Identifiable, Hashable {
 
     let id = UUID()
     var name: String
+    var topic: String? = nil
     var users: [String] = []
     var log: [ChatMessage] = []
     var unreadCount: Int = 0

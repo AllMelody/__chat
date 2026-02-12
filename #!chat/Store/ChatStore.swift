@@ -28,6 +28,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     var pendingJoinServerID: UUID? = nil
     var pendingEditServerID: UUID? = nil
     var joinChannelDraft: String = ""
+    var isPresentingTopicEditor: Bool = false
     
     // Preferences
     weak var preferences: AppPreferences?
@@ -79,6 +80,16 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         connectionService.partChannel(channel, from: server)
     }
     
+    func setTopic(_ topic: String, on channel: IRCChannel) {
+        guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
+        connectionService.sendTopicChange(topic, for: channel.name, on: server)
+    }
+
+    func requestTopic(for channel: IRCChannel) {
+        guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
+        connectionService.requestTopic(for: channel.name, on: server)
+    }
+
     func closePrivateMessage(_ pm: IRCPrivateMessage, from server: IRCServer) {
         server.privateMessages.removeAll { $0.id == pm.id }
         server.log.append(ChatMessage(time: Date(), text: "Closed conversation with \(pm.nickname)"))
@@ -385,6 +396,23 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         guard let channelObj = server.channels.first(where: { $0.name.lowercased() == channel.lowercased() }) else { return }
 
         channelObj.addUserIfNotPresent(nick)
+    }
+
+    func ircConnectionService(_ service: IRCConnectionService, didReceiveTopicChange topic: String, for channel: String, on serverID: UUID, changedBy nick: String?) {
+        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) else { return }
+
+        channelObj.topic = topic.isEmpty ? nil : topic
+
+        let logText: String
+        if let nick {
+            logText = "\(nick) changed the topic to: \(topic)"
+        } else {
+            logText = "Topic: \(topic)"
+        }
+        let message = ChatMessage(time: Date(), text: logText)
+        channelObj.log.append(message)
+        logVersion &+= 1
     }
 
     func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID) {

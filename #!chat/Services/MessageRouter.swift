@@ -93,6 +93,17 @@ final class MessageRouter {
             guard let client = connectionService.clients[s.id], client.canSend else { log("Not connected."); return }
             client.send(.otherCommand("NAMES", [ ch.name ]))
 
+        case "topic":
+            guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to set or view the topic."); return }
+            guard let client = connectionService.clients[s.id], client.canSend else { log("Not connected."); return }
+            if parts.isEmpty {
+                // /topic with no args — request current topic from server
+                client.send(.otherCommand("TOPIC", [ch.name]))
+            } else {
+                let newTopic = parts.joined(separator: " ")
+                client.send(.otherCommand("TOPIC", [ch.name, newTopic]))
+            }
+
         default:
             log("Unknown command: /\(cmd)")
         }

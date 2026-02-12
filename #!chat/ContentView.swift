@@ -9,7 +9,6 @@ struct ContentView: View {
     @Environment(\.controlActiveState) private var activeState
 
     @State private var draft = ""
-    @FocusState private var composerFocused: Bool
 
     private let rowHeight: CGFloat = 24
     private let iconColWidth: CGFloat = 18
@@ -77,17 +76,21 @@ struct ContentView: View {
         }
     }
 
+    private func focusComposer() {
+        NotificationCenter.default.post(name: .composerFocus, object: nil)
+    }
+
     var body: some View {
         let splitView = AutosavingSplitView(left: { leftPane }, right: { rightPane }, autosaveName: "MainSplitRightWidth")
-        
+
         let viewWithAppearance = splitView
-            .onAppear { validateSelection(); composerFocused = true }
+            .onAppear { validateSelection(); focusComposer() }
             .onChange(of: model.servers.map(\.id)) { _, _ in validateSelection() }
             .onChange(of: model.servers.flatMap { $0.channels.map(\.id) }) { _, _ in validateSelection() }
         
         let viewWithStateChanges = viewWithAppearance
-            .onChange(of: activeState) { _, new in if new == .key { composerFocused = true } }
-            .onChange(of: model.selectedNodeID) { _, _ in composerFocused = true }
+            .onChange(of: activeState) { _, new in if new == .key { focusComposer() } }
+            .onChange(of: model.selectedNodeID) { _, _ in focusComposer() }
             .onReceive(NotificationCenter.default.publisher(for: .navigateUp)) { _ in
                 navigateUp()
             }
@@ -98,6 +101,7 @@ struct ContentView: View {
         let addServerBinding = Binding(get: { model.isPresentingAddServer }, set: { model.isPresentingAddServer = $0 })
         let joinChannelBinding = Binding(get: { model.isPresentingJoinChannel }, set: { model.isPresentingJoinChannel = $0 })
         let editServerBinding = Binding(get: { model.isPresentingEditServer }, set: { model.isPresentingEditServer = $0 })
+        let topicEditorBinding = Binding(get: { model.isPresentingTopicEditor }, set: { model.isPresentingTopicEditor = $0 })
 
         return viewWithStateChanges
             .sheet(isPresented: addServerBinding) { ServerEditorView() }
@@ -112,28 +116,38 @@ struct ContentView: View {
                     }
                 }
             }
+            .sheet(isPresented: topicEditorBinding) {
+                if let channel = findChannel(id: model.selectedNodeID) {
+                    TopicEditorView(channel: channel)
+                }
+            }
     }
 
     // MARK: - Left Pane
     private var leftPane: some View {
         VStack(spacing: 0) {
+            if let topic = findChannel(id: model.selectedNodeID)?.topic {
+                Text(topic)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .onTapGesture { model.isPresentingTopicEditor = true }
+                Divider()
+            }
             LogView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
                 .padding(.leading, 4)
                 .padding(.bottom, 4)
             Divider()
-            TextField("Type a message…", text: $draft)
-                .textFieldStyle(.plain)
-                .lineLimit(1)
+            ComposerTextField(text: $draft, placeholder: "Type a message…")
                 .padding(.horizontal, 6)
-                .padding(.vertical, 4)
                 .frame(height: 30)
-                .onSubmit { 
-                    if canSendMessage {
-                        sendMessage()
-                        composerFocused = true
-                    }
+                .onReceive(NotificationCenter.default.publisher(for: .composerSubmit)) { _ in
+                    if canSendMessage { sendMessage() }
                 }
-                .focused($composerFocused)
         }
     }
 
@@ -264,6 +278,74 @@ struct ContentView: View {
 }
 
 // MARK: - Log View (NSTextView wrapper)
+
+// MARK: - Composer (NSTextField wrapper to avoid placeholder shift on focus change)
+
+private struct ComposerTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: ComposerTextField
+        var focusObserver: Any?
+        weak var textField: NSTextField?
+
+        init(_ parent: ComposerTextField) { self.parent = parent }
+
+        deinit {
+            if let obs = focusObserver { NotificationCenter.default.removeObserver(obs) }
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let tf = obj.object as? NSTextField else { return }
+            parent.text = tf.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                NotificationCenter.default.post(name: .composerSubmit, object: nil)
+                return true
+            }
+            return false
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let tf = NSTextField()
+        tf.placeholderString = placeholder
+        tf.isBordered = false
+        tf.drawsBackground = false
+        tf.focusRingType = .none
+        tf.font = .systemFont(ofSize: NSFont.systemFontSize)
+        tf.lineBreakMode = .byTruncatingTail
+        tf.maximumNumberOfLines = 1
+        tf.cell?.wraps = false
+        tf.cell?.isScrollable = true
+        tf.delegate = context.coordinator
+        tf.translatesAutoresizingMaskIntoConstraints = false
+        tf.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        context.coordinator.textField = tf
+        context.coordinator.focusObserver = NotificationCenter.default.addObserver(
+            forName: .composerFocus, object: nil, queue: .main
+        ) { [weak tf] _ in
+            guard let tf else { return }
+            tf.window?.makeFirstResponder(tf)
+        }
+
+        // Initial focus after a brief delay to ensure the view is in the window
+        DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
+        return tf
+    }
+
+    func updateNSView(_ tf: NSTextField, context: Context) {
+        if tf.stringValue != text {
+            tf.stringValue = text
+        }
+    }
+}
 
 struct LogView: View {
     let logVersion: Int
@@ -974,6 +1056,34 @@ struct JoinChannelView: View {
         }
         .padding(16)
         .frame(width: 360)
+    }
+}
+
+struct TopicEditorView: View {
+    @Environment(ChatStore.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let channel: IRCChannel
+    @State private var topicDraft: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Topic for \(channel.name)").font(.headline)
+            TextEditor(text: $topicDraft)
+                .font(.body)
+                .frame(minHeight: 80, maxHeight: 200)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Set Topic") {
+                    model.setTopic(topicDraft, on: channel)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 420)
+        .onAppear { topicDraft = channel.topic ?? "" }
     }
 }
 
