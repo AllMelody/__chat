@@ -140,11 +140,12 @@ struct ContentView: View {
             }
             LogView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
                 .padding(.leading, 4)
-                .padding(.bottom, 4)
+                .padding(.bottom, 2)
+
             Divider()
             ComposerTextField(text: $draft, placeholder: "Type a message…")
-                .padding(.horizontal, 6)
-                .frame(height: 30)
+                .padding(.leading, 6)
+                .frame(height: 24)
                 .onReceive(NotificationCenter.default.publisher(for: .composerSubmit)) { _ in
                     if canSendMessage { sendMessage() }
                 }
@@ -285,10 +286,44 @@ private struct ComposerTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
 
+    /// The display string shown in the text field: newlines replaced with ` ⏎ ` so the field stays one line.
+    /// The binding `text` keeps the real newlines for sending.
+    private static let newlineSymbol = " \\n "
+    private static let newlineSymbolColor = NSColor.secondaryLabelColor
+
+    private static func flatten(_ s: String) -> String {
+        s.replacingOccurrences(of: "\n", with: newlineSymbol)
+    }
+    private static func unflatten(_ s: String) -> String {
+        s.replacingOccurrences(of: newlineSymbol, with: "\n")
+    }
+
+    /// Colorizes newline symbols in the field editor's text storage.
+    /// Uses textStorage directly so the NSTextField's intrinsic size is unaffected.
+    private static func colorizeNewlineSymbols(in textField: NSTextField) {
+        guard let editor = textField.currentEditor() as? NSTextView,
+              let storage = editor.textStorage else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        // Reset foreground color to default (prevents color bleed from typing near symbols)
+        storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+        // Apply teal color to each newline symbol
+        let text = storage.string as NSString
+        var searchRange = NSRange(location: 0, length: text.length)
+        while searchRange.location < text.length {
+            let found = text.range(of: newlineSymbol, range: searchRange)
+            if found.location == NSNotFound { break }
+            storage.addAttribute(.foregroundColor, value: newlineSymbolColor, range: found)
+            searchRange.location = found.location + found.length
+            searchRange.length = text.length - searchRange.location
+        }
+    }
+
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerTextField
         var focusObserver: Any?
         weak var textField: NSTextField?
+        /// Guard against re-entrant updates while we're adjusting the field value.
+        var isSyncing = false
 
         init(_ parent: ComposerTextField) { self.parent = parent }
 
@@ -297,8 +332,27 @@ private struct ComposerTextField: NSViewRepresentable {
         }
 
         func controlTextDidChange(_ obj: Notification) {
-            guard let tf = obj.object as? NSTextField else { return }
-            parent.text = tf.stringValue
+            guard !isSyncing, let tf = obj.object as? NSTextField else { return }
+            isSyncing = true
+            defer { isSyncing = false }
+
+            let raw = tf.stringValue
+            // If the user pasted newlines, flatten them for display with colored symbols
+            if raw.contains("\n") {
+                let flat = ComposerTextField.flatten(raw)
+                tf.stringValue = flat
+                ComposerTextField.colorizeNewlineSymbols(in: tf)
+                if let editor = tf.currentEditor() {
+                    editor.selectedRange = NSRange(location: flat.count, length: 0)
+                }
+                parent.text = raw
+            } else {
+                parent.text = ComposerTextField.unflatten(raw)
+                // Re-colorize if symbols present (user typed near a symbol, colors may bleed)
+                if raw.contains(ComposerTextField.newlineSymbol) {
+                    ComposerTextField.colorizeNewlineSymbols(in: tf)
+                }
+            }
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -335,14 +389,15 @@ private struct ComposerTextField: NSViewRepresentable {
             tf.window?.makeFirstResponder(tf)
         }
 
-        // Initial focus after a brief delay to ensure the view is in the window
         DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
         return tf
     }
 
     func updateNSView(_ tf: NSTextField, context: Context) {
-        if tf.stringValue != text {
-            tf.stringValue = text
+        guard !context.coordinator.isSyncing else { return }
+        let flat = Self.flatten(text)
+        if tf.stringValue != flat {
+            tf.stringValue = flat
         }
     }
 }
