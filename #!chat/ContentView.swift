@@ -156,11 +156,11 @@ struct ContentView: View {
 
     // MARK: - Right Pane
     private var rightPane: some View {
-        VSplitView {
+        AutosavingSplitView(left: {
             List { ForEach(currentUsers, id: \.self) { Text($0) } }
                 .listStyle(.plain)
                 .environment(\.defaultMinListRowHeight, rowHeight)
-
+        }, right: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if model.servers.isEmpty {
@@ -250,7 +250,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .contextMenu { Button("Add Server…") { model.isPresentingAddServer = true } }
-        }
+        }, autosaveName: "RightPaneSplitHeight", isVertical: false)
     }
 
     @ViewBuilder
@@ -1161,13 +1161,15 @@ struct AutosavingSplitView<Left: View, Right: View>: NSViewRepresentable {
     let left: Left
     let right: Right
     let autosaveName: String
-    init(@ViewBuilder left: () -> Left, @ViewBuilder right: () -> Right, autosaveName: String) {
+    let isVertical: Bool
+    init(@ViewBuilder left: () -> Left, @ViewBuilder right: () -> Right, autosaveName: String, isVertical: Bool = true) {
         self.left = left()
         self.right = right()
         self.autosaveName = autosaveName
+        self.isVertical = isVertical
     }
     func makeNSView(context: Context) -> NSSplitView {
-        let split = NSSplitView(); split.isVertical = true; split.dividerStyle = .thin
+        let split = NSSplitView(); split.isVertical = isVertical; split.dividerStyle = .thin
         let leftHost = NSHostingView(rootView: left)
         let rightHost = NSHostingView(rootView: right)
         split.addArrangedSubview(leftHost); split.addArrangedSubview(rightHost)
