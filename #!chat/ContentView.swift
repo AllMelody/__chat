@@ -145,7 +145,9 @@ struct ContentView: View {
             Divider()
             ComposerTextField(text: $draft, placeholder: "Type a message…")
                 .padding(.leading, 6)
-                .frame(height: 24)
+                .padding(.trailing, 4)
+                .padding(.bottom, 2)
+                .frame(height: 26)
                 .onReceive(NotificationCenter.default.publisher(for: .composerSubmit)) { _ in
                     if canSendMessage { sendMessage() }
                 }
@@ -429,6 +431,7 @@ private struct LogTextView: NSViewRepresentable {
         var lastMessageCount: Int = 0
         var isPinnedToBottom: Bool = true
         var boundsObserver: Any?
+        var frameObserver: Any?
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
         var lastContentSignature: Int = 0
@@ -436,6 +439,9 @@ private struct LogTextView: NSViewRepresentable {
         
         deinit {
             if let observer = boundsObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = frameObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
         }
@@ -468,7 +474,7 @@ private struct LogTextView: NSViewRepresentable {
         textView.drawsBackground = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.textContainerInset = NSSize(width: 0, height: 0)
+        textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
         textView.usesFontPanel = false
@@ -488,6 +494,13 @@ private struct LogTextView: NSViewRepresentable {
         context.coordinator.boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { _ in
             guard let tv = context.coordinator.textView, let sv = context.coordinator.scrollView else { return }
             context.coordinator.isPinnedToBottom = isAtBottom(textView: tv, scrollView: sv)
+        }
+        scroll.postsFrameChangedNotifications = true
+        context.coordinator.frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { _ in
+            guard let tv = context.coordinator.textView else { return }
+            if context.coordinator.isPinnedToBottom {
+                tv.scrollToEndOfDocument(nil)
+            }
         }
         apply(messages: messages, to: textView)
         textView.scrollToEndOfDocument(nil)
