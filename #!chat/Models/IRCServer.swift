@@ -18,7 +18,10 @@ final class IRCServer: Identifiable, Hashable {
     var autoConnectOnLaunch: Bool = false
     // Last known nickname for this server (set on register or nick change)
     var currentNick: String? = nil
-    
+
+    // Per-server preferred nickname (nil/empty = use the app-wide default). Set by the user.
+    var nickname: String? = nil
+
     // Connection status tracking - single source of truth
     var connectionStatus: ConnectionStatus = .disconnected
 
@@ -26,9 +29,11 @@ final class IRCServer: Identifiable, Hashable {
     var isConnected: Bool {
         connectionStatus == .connected
     }
-    var reconnectionAttempts: Int = 0
-    var maxReconnectionAttempts: Int = 5
-    var reconnectionDelay: TimeInterval = 10.0
+    /// Read-only mirror of the current reconnection attempt, for log/display only.
+    /// The source of truth for attempt counting and policy is ReconnectionManager;
+    /// this is updated via the IRCConnectionService -> ReconnectionManagerDelegate hop
+    /// and reset to 0 on a successful connect or an explicit disconnect.
+    var displayAttempt: Int = 0
     var shouldAutoReconnect: Bool = true
     
     enum ConnectionStatus {
@@ -40,7 +45,7 @@ final class IRCServer: Identifiable, Hashable {
         case reconnectionFailed
     }
 
-    init(id: UUID = UUID(), name: String, host: String, port: Int, password: String?, useTLS: Bool = false, autoConnectOnLaunch: Bool = false) {
+    init(id: UUID = UUID(), name: String, host: String, port: Int, password: String?, useTLS: Bool = false, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {
         self.id = id
         self.name = name
         self.host = host
@@ -48,6 +53,7 @@ final class IRCServer: Identifiable, Hashable {
         self.password = password
         self.useTLS = useTLS
         self.autoConnectOnLaunch = autoConnectOnLaunch
+        self.nickname = nickname
     }
 
     // MARK: - Channel/PM Helpers
@@ -75,11 +81,13 @@ final class IRCServer: Identifiable, Hashable {
     // MARK: - Persistence
 
     func toRecord() -> IRCServerRecord {
-        IRCServerRecord(id: id, name: name, host: host, port: port, password: password, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch)
+        IRCServerRecord(id: id, name: name, host: host, port: port, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname)
     }
 
     convenience init(from r: IRCServerRecord) {
-        self.init(id: r.id, name: r.name, host: r.host, port: r.port, password: r.password, useTLS: r.useTLS ?? false, autoConnectOnLaunch: r.autoConnectOnLaunch ?? false)
+        // Password is NOT taken from the record (it is only the legacy migration value).
+        // ChatStore.loadServers populates `password` from the Keychain after constructing.
+        self.init(id: r.id, name: r.name, host: r.host, port: r.port, password: nil, useTLS: r.useTLS ?? false, autoConnectOnLaunch: r.autoConnectOnLaunch ?? false, nickname: r.nickname)
     }
 }
 
@@ -88,7 +96,51 @@ struct IRCServerRecord: Codable {
     let name: String
     let host: String
     let port: Int
+    /// Legacy plaintext password. Only ever DECODED from old persisted JSON for a
+    /// one-time migration into the Keychain; never encoded going forward.
     let password: String?
     let useTLS: Bool?
     let autoConnectOnLaunch: Bool?
+    let nickname: String?
+
+    init(id: UUID, name: String, host: String, port: Int, password: String? = nil, useTLS: Bool?, autoConnectOnLaunch: Bool?, nickname: String? = nil) {
+        self.id = id
+        self.name = name
+        self.host = host
+        self.port = port
+        self.password = password
+        self.useTLS = useTLS
+        self.autoConnectOnLaunch = autoConnectOnLaunch
+        self.nickname = nickname
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, host, port, password, useTLS, autoConnectOnLaunch, nickname
+    }
+
+    // Custom encode: deliberately OMIT password so it never returns to plaintext storage.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(host, forKey: .host)
+        try c.encode(port, forKey: .port)
+        try c.encodeIfPresent(useTLS, forKey: .useTLS)
+        try c.encodeIfPresent(autoConnectOnLaunch, forKey: .autoConnectOnLaunch)
+        try c.encodeIfPresent(nickname, forKey: .nickname)
+        // password intentionally not encoded
+    }
+
+    // Decode still reads password from legacy JSON (decodeIfPresent -> nil for new JSON).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        host = try c.decode(String.self, forKey: .host)
+        port = try c.decode(Int.self, forKey: .port)
+        password = try c.decodeIfPresent(String.self, forKey: .password)
+        useTLS = try c.decodeIfPresent(Bool.self, forKey: .useTLS)
+        autoConnectOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .autoConnectOnLaunch)
+        nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
+    }
 }

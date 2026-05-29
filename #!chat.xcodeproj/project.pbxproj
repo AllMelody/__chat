@@ -14,12 +14,18 @@
 
 /* Begin PBXFileReference section */
 		CEA622A42E458CD60008C2B0 /* #!chat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "#!chat.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DD0000000000000000000006 /* #!chatTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "#!chatTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		CEA622A62E458CD60008C2B0 /* #!chat */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "#!chat";
+			sourceTree = "<group>";
+		};
+		DD0000000000000000000005 /* #!chatTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "#!chatTests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -35,6 +41,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DD0000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -42,6 +55,7 @@
 			isa = PBXGroup;
 			children = (
 				CEA622A62E458CD60008C2B0 /* #!chat */,
+				DD0000000000000000000005 /* #!chatTests */,
 				CEA622A52E458CD60008C2B0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -50,6 +64,7 @@
 			isa = PBXGroup;
 			children = (
 				CEA622A42E458CD60008C2B0 /* #!chat.app */,
+				DD0000000000000000000006 /* #!chatTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -82,6 +97,29 @@
 			productReference = CEA622A42E458CD60008C2B0 /* #!chat.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DD0000000000000000000001 /* #!chatTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DD0000000000000000000007 /* Build configuration list for PBXNativeTarget "#!chatTests" */;
+			buildPhases = (
+				DD0000000000000000000002 /* Sources */,
+				DD0000000000000000000003 /* Frameworks */,
+				DD0000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DD000000000000000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DD0000000000000000000005 /* #!chatTests */,
+			);
+			name = "#!chatTests";
+			packageProductDependencies = (
+			);
+			productName = "#!chatTests";
+			productReference = DD0000000000000000000006 /* #!chatTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -94,6 +132,10 @@
 				TargetAttributes = {
 					CEA622A32E458CD60008C2B0 = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					DD0000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = CEA622A32E458CD60008C2B0;
 					};
 				};
 			};
@@ -117,12 +159,20 @@
 			projectRoot = "";
 			targets = (
 				CEA622A32E458CD60008C2B0 /* #!chat */,
+				DD0000000000000000000001 /* #!chatTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		CEA622A22E458CD60008C2B0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD0000000000000000000004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -139,7 +189,32 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DD0000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		DD000000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CEA6229C2E458CD60008C2B0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CEA622A32E458CD60008C2B0;
+			remoteInfo = "#!chat";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		DD000000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CEA622A32E458CD60008C2B0 /* #!chat */;
+			targetProxy = DD000000000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		CEA622AD2E458CD70008C2B0 /* Debug */ = {
@@ -348,6 +423,46 @@
 			};
 			name = Release;
 		};
+		DD0000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.AllMelody.--chatTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/#!chat.app/Contents/MacOS/#!chat";
+			};
+			name = Debug;
+		};
+		DD0000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.AllMelody.--chatTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/#!chat.app/Contents/MacOS/#!chat";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -365,6 +480,15 @@
 			buildConfigurations = (
 				CEA622B02E458CD70008C2B0 /* Debug */,
 				CEA622B12E458CD70008C2B0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DD0000000000000000000007 /* Build configuration list for PBXNativeTarget "#!chatTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD0000000000000000000008 /* Debug */,
+				DD0000000000000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

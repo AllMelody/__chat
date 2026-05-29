@@ -22,7 +22,6 @@ final class ReconnectionManager {
 
     private var attempts: [UUID: Int] = [:]
     private var timers: [UUID: Timer] = [:]
-    private var policies: [UUID: Policy] = [:]
 
     // MARK: - Public API
 
@@ -32,9 +31,6 @@ final class ReconnectionManager {
     func scheduleReconnection(for serverID: UUID, policy: Policy = .default) -> Bool {
         // Cancel any existing timer
         cancelReconnection(for: serverID)
-
-        // Store policy for this server
-        policies[serverID] = policy
 
         // Increment attempt counter
         let attempt = (attempts[serverID] ?? 0) + 1
@@ -62,6 +58,7 @@ final class ReconnectionManager {
                     self.delegate?.reconnectionManager(self, shouldReconnect: serverID)
                 }
             }
+            RunLoop.main.add(timer, forMode: .common)
             timers[serverID] = timer
         }
 
@@ -78,7 +75,6 @@ final class ReconnectionManager {
     /// Call this after a successful connection.
     func resetAttempts(for serverID: UUID) {
         attempts.removeValue(forKey: serverID)
-        policies.removeValue(forKey: serverID)
     }
 
     /// Cancel all pending reconnections.

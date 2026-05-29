@@ -17,7 +17,7 @@ import Foundation
 /**
  * Delegate methods called by `IRCClient` upon receiving IRC commands.
  */
-public protocol IRCClientDelegate {
+public protocol IRCClientDelegate: AnyObject {
   
   func client(_ client        : IRCClient,
               registered nick : IRCNickName,

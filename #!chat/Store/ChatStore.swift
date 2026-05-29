@@ -7,7 +7,8 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     private let connectionService = IRCConnectionService()
     private let imageCache = ImageCacheService()
     private let messageRouter = MessageRouter()
-    
+    private let keychain = KeychainService()
+
     // Core data
     var servers: [IRCServer] = [] { didSet { persistServers() } }
 
@@ -51,6 +52,12 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         imageCache.onThumbnailUpdated = { [weak self] messageID, thumbnails in
             self?.messageThumbnails[messageID] = thumbnails
         }
+    }
+
+    /// Pushes preference values that backing services mirror (currently the raw-traffic debug
+    /// log). Call after `preferences` is set and whenever the relevant preference changes.
+    func syncPreferencesToServices() {
+        connectionService.debugRawServerLog = preferences?.debugRawServerLog ?? false
     }
     
     // MARK: - Thumbnails
@@ -104,13 +111,14 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     
     // MARK: - Server CRUD
     
-    func addServer(name: String, host: String, port: Int, password: String?, useTLS: Bool, autoConnectOnLaunch: Bool = false) {
-        let server = IRCServer(name: name, host: host, port: port, password: password, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch)
+    func addServer(name: String, host: String, port: Int, password: String?, useTLS: Bool, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {
+        let server = IRCServer(name: name, host: host, port: port, password: password, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname)
+        try! syncKeychain(password: password, for: server.id)
         servers.append(server)
         selectedNodeID = server.id
     }
     
-    func updateServer(id: UUID, name: String, host: String, port: Int, password: String?, useTLS: Bool, autoConnectOnLaunch: Bool) {
+    func updateServer(id: UUID, name: String, host: String, port: Int, password: String?, useTLS: Bool, autoConnectOnLaunch: Bool, nickname: String? = nil) {
         guard let idx = servers.firstIndex(where: { $0.id == id }) else { return }
         let s = servers[idx]
         s.name = name
@@ -119,6 +127,8 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         s.password = password
         s.useTLS = useTLS
         s.autoConnectOnLaunch = autoConnectOnLaunch
+        s.nickname = nickname
+        try! syncKeychain(password: password, for: id)
         // Force persistence because didSet on `servers` doesn't trigger for in-place mutation
         persistServers()
     }
@@ -126,6 +136,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func deleteServer(_ server: IRCServer) {
         let deletingSelected = (selectedNodeID == server.id)
         connectionService.disconnect(server)
+        try! keychain.delete(for: server.id)
         servers.removeAll { $0.id == server.id }
         if deletingSelected { selectedNodeID = servers.first?.id }
     }
@@ -160,9 +171,9 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         // First check the observable status - this is the source of truth for UI state
         guard server.connectionStatus == .connected else { return false }
 
-        // Then verify the client actually exists and is registered
-        guard let client = connectionService.clients[server.id] else { return false }
-        guard client.canSend else { return false }
+        // Then verify the server is fully registered. Uses a main-thread set in
+        // IRCConnectionService instead of reading IRCClient.state (event-loop-owned).
+        guard connectionService.isRegistered(server.id) else { return false }
 
         // If a channel is selected, only allow sending after the server confirmed our JOIN
         if let channel = server.channels.first(where: { $0.id == selectionID }) {
@@ -182,14 +193,39 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             UserDefaults.standard.set(data, forKey: serversPersistenceKey)
         }
     }
-    
+
+    /// Writes the password to the Keychain, or deletes the entry if password is nil/empty.
+    private func syncKeychain(password: String?, for id: UUID) throws {
+        if let password, !password.isEmpty {
+            try keychain.save(password: password, for: id)
+        } else {
+            try keychain.delete(for: id)
+        }
+    }
+
     private func loadServers() {
         guard let data = UserDefaults.standard.data(forKey: serversPersistenceKey),
               let records = try? JSONDecoder().decode([IRCServerRecord].self, from: data) else {
             servers = []
             return
         }
-        servers = records.map { IRCServer(from: $0) }
+        var migrated = false
+        let loaded: [IRCServer] = records.map { record in
+            let server = IRCServer(from: record)
+            // Migration: legacy records carried a plaintext password. Move it to the Keychain.
+            if let legacy = record.password, !legacy.isEmpty {
+                try! keychain.save(password: legacy, for: record.id)
+                migrated = true
+            }
+            // Load the (possibly just-migrated) password from the Keychain into memory.
+            server.password = try! keychain.password(for: record.id)
+            return server
+        }
+        servers = loaded
+        // After a migration, make sure the legacy plaintext password is dropped from UserDefaults.
+        // Assigning `servers` already triggers didSet -> persistServers() (and encode(to:) omits the
+        // password), so this is belt-and-suspenders that also states the migration intent explicitly.
+        if migrated { persistServers() }
     }
     
     private func autoConnectFlaggedServers() {
@@ -249,7 +285,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         connectionService.cancelConnectionTimeout(for: server)
         server.currentNick = nick
 
-        let statusText = server.reconnectionAttempts > 0 ?
+        let statusText = server.displayAttempt > 0 ?
             "Reconnected as \(nick)" :
             "Registered as \(nick)"
         let message = ChatMessage(time: Date(), text: statusText)
@@ -324,6 +360,10 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         case .channel(let name, let isMine):
             let channel = server.getOrCreateChannel(named: name)
 
+            // Drop an immediate server echo of a line we just echoed locally (servers with
+            // znc.in/self-message echo our own PRIVMSGs back). Heuristic: same sender+text as
+            // the last entry within 1s. Buffer playback on reconnect arrives in a burst with no
+            // matching just-appended local line, so it is not affected.
             let isDuplicate = channel.log.last?.senderNick == message.senderNick &&
                             channel.log.last?.text == message.text &&
                             Date().timeIntervalSince(channel.log.last?.time ?? Date.distantPast) < 1.0

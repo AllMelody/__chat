@@ -12,9 +12,10 @@ struct ChatApp: App {
     let preferences = AppPreferences()
     let model: ChatStore
     
-    init() { 
+    init() {
         self.model = ChatStore()
-        model.preferences = preferences 
+        model.preferences = preferences
+        model.syncPreferencesToServices()
     }
 
     private var isChannelSelected: Bool {
@@ -65,6 +66,7 @@ struct ChatApp: App {
         Settings {
             PreferencesView()
                 .environment(preferences)
+                .environment(model)
         }
     }
 }

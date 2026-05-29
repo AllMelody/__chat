@@ -40,7 +40,10 @@ open class IRCClient : IRCClientMessageTarget {
   
   public let options   : IRCClientOptions
   public let eventLoop : EventLoop
-  public var delegate  : IRCClientDelegate?
+  public weak var delegate  : IRCClientDelegate?
+  /// The app's server identifier for this connection (set by IRCConnectionService),
+  /// giving an O(1) client -> serverID mapping with no staleness.
+  public var serverID  : UUID?
   
   public enum Error : Swift.Error {
     case writeError(Swift.Error)
@@ -492,58 +495,6 @@ open class IRCClient : IRCClientMessageTarget {
   }
   
   
-  // MARK: - Subscriptions
-  
-  var subscribedChannels = Set<IRCChannelName>()
-  
-  private func _resubscribe() {
-    if !subscribedChannels.isEmpty {
-      // TODO: issues JOIN commands
-    }
-    
-    // TODO: we have no queue, right?
-    // _processQueue()
-  }
-  
-
-  // MARK: - Retry
-  
-  #if false // TODO: finish Noze port
-  private func retryConnectAfterFailure() {
-    let retryHow : IRCRetryResult
-    
-    if let cb = options.retryStrategy {
-      retryHow = cb(retryInfo)
-    }
-    else {
-      if retryInfo.attempt < 10 {
-        retryHow = .retryAfter(TimeInterval(retryInfo.attempt) * 0.200)
-      }
-      else {
-        retryHow = .stop
-      }
-    }
-    
-    switch retryHow {
-      case .retryAfter(let timeout):
-        // TBD: special Retry status?
-        if state != .connecting {
-          state = .connecting
-          eventLoop.scheduleTask(in: .milliseconds(timeout * 1000.0)) {
-            self.state = .disconnected
-            self.connect()
-          }
-        }
-      
-      case .error(let error):
-        stop(error: error)
-      
-      case .stop:
-        stop(error: IRCClientError.ConnectionQuit)
-    }
-  }
-  #endif
-  
   func handleRegistrationDone() {
     guard case .registering(let channel, let nick, let user) = state else {
       print("WARNING: Expected registering state in \(#function), but got: \(state)")
@@ -552,7 +503,6 @@ open class IRCClient : IRCClientMessageTarget {
     
     state = .registered(channel: channel, nick: nick, userInfo: user)
     delegate?.client(self, registered: nick, with: user)
-    self._resubscribe()
   }
   
   func handleRegistrationFailed(with message: IRCMessage) {
@@ -609,7 +559,6 @@ open class IRCClient : IRCClientMessageTarget {
         capNegotiationInProgress = false
         state = .registered(channel: channel, nick: nick, userInfo: user)
         delegate?.client(self, registered: nick, with: user)
-        self._resubscribe()
         return
       }
 
@@ -834,24 +783,9 @@ extension IRCClient : IRCDispatcher {
         }
         messageOfTheDay = ""
       
-      /* name reply */
-      // <IRCCmd: 353 args=Guest1,=,#ZeeQL,Guest1> localhost -
-      // <IRCCmd: 366 args=Guest1,#ZeeQL,End of /NAMES list> localhost -
-      case .numeric(.replyNameReply, _ /*let args*/):
-        #if false
-          // messageOfTheDay += (args.last ?? "") + "\n"
-        #else
-          break
-        #endif
-      case .numeric(.replyEndOfNames, _):
-        #if false
-          if !messageOfTheDay.isEmpty {
-            delegate?.client(self, messageOfTheDay: messageOfTheDay)
-          }
-          messageOfTheDay = ""
-        #else
-          break
-        #endif
+      // 353 (NAMES) and 366 (end-of-NAMES) are intentionally NOT handled here: they fall
+      // through to the `default:` arm below, which forwards them to the delegate's
+      // received(_:) so IRCConnectionService can build the channel member list.
 
       case .numeric(.replyTopic, let args):
         // :localhost 332 Guest31 #NIO :Welcome to #nio!

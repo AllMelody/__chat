@@ -157,7 +157,7 @@ final class ImageCacheService {
             let key = u.absoluteString
             if seen.insert(key).inserted {
                 // YouTube: we know the thumbnail URL without a HEAD request
-                if let ytThumbURL = self.youTubeThumbnailURL(for: u) {
+                if let ytThumbURL = ImageCacheService.youTubeThumbnailURL(for: u) {
                     if let cachedImage = self.cachedImage(for: key) {
                         var list = self.messageThumbnails[message.id] ?? []
                         if let idx = list.firstIndex(where: { $0.url == key }) {
@@ -192,7 +192,7 @@ final class ImageCacheService {
     }
 
     /// Extracts a YouTube thumbnail URL from a youtube.com or youtu.be link.
-    private func youTubeThumbnailURL(for url: URL) -> String? {
+    static func youTubeThumbnailURL(for url: URL) -> String? {
         let host = url.host?.lowercased() ?? ""
         var videoID: String?
 

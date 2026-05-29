@@ -436,7 +436,14 @@ private struct LogTextView: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         var lastContentSignature: Int = 0
         var lastContentHeight: CGFloat = 0
-        
+        // Incremental rendering bookkeeping: ordered ids currently in textStorage, and the
+        // thumbnail fingerprint of each, so apply() can choose append-fast-path vs full rebuild.
+        var lastRenderedIDs: [UUID] = []
+        var renderedThumbFingerprints: [UUID: Int] = [:]
+        // myNick affects per-message "is mine" coloring; a change must force a full rebuild so
+        // already-rendered lines recolor (the append-fast-path never revisits old messages).
+        var lastMyNick: String?
+
         deinit {
             if let observer = boundsObserver {
                 NotificationCenter.default.removeObserver(observer)
@@ -502,7 +509,7 @@ private struct LogTextView: NSViewRepresentable {
                 tv.scrollToEndOfDocument(nil)
             }
         }
-        apply(messages: messages, to: textView)
+        apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: true)
         textView.scrollToEndOfDocument(nil)
         context.coordinator.lastSelectionToken = selectionToken
         context.coordinator.lastMessageCount = messages.count
@@ -528,12 +535,14 @@ private struct LogTextView: NSViewRepresentable {
             }
             return hash
         }()
-        if context.coordinator.lastContentSignature != signature {
-            apply(messages: messages, to: textView)
+        let selectionChanged = (context.coordinator.lastSelectionToken != selectionToken)
+        let myNickChanged = (context.coordinator.lastMyNick != myNick)
+        if context.coordinator.lastContentSignature != signature || myNickChanged {
+            apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: selectionChanged || myNickChanged)
             context.coordinator.lastContentSignature = signature
         }
+        context.coordinator.lastMyNick = myNick
 
-        let selectionChanged = (context.coordinator.lastSelectionToken != selectionToken)
         if selectionChanged { context.coordinator.isPinnedToBottom = true }
 
         // Ensure layout to measure content height change accurately
@@ -566,7 +575,81 @@ private struct LogTextView: NSViewRepresentable {
         try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     }()
     
-    private func apply(messages: [ChatMessage], to textView: NSTextView) {
+    private func apply(messages: [ChatMessage], to textView: NSTextView, coordinator: Coordinator, forceFullRebuild: Bool) {
+        guard let storage = textView.textStorage else { return }
+        let newIDs = messages.map { $0.id }
+        let prior = coordinator.lastRenderedIDs
+
+        // Append-fast-path is valid ONLY when the new list is a pure suffix-append of what we
+        // already rendered (identical prefix, strictly more at the end) AND no already-rendered
+        // message changed its thumbnail fingerprint. Anything else — selection change, front
+        // truncation from maxLogLines, or a thumbnail loading on an existing message — falls
+        // back to a full rebuild.
+        var canAppend = !forceFullRebuild
+            && newIDs.count > prior.count
+            && Array(newIDs.prefix(prior.count)) == prior
+        if canAppend {
+            for id in prior where coordinator.renderedThumbFingerprints[id] != thumbnailFingerprint(for: id) {
+                canAppend = false
+                break
+            }
+        }
+
+        if canAppend {
+            let appended = NSMutableAttributedString()
+            // The existing storage has no trailing newline, so the first new message needs a
+            // separator if there is already content.
+            var needsSeparator = !prior.isEmpty && storage.length > 0
+            for msg in messages.suffix(newIDs.count - prior.count) {
+                if needsSeparator { appended.append(NSAttributedString(string: "\n", attributes: baseAttributes())) }
+                needsSeparator = true
+                appended.append(attributedString(for: msg))
+            }
+            storage.append(appended)
+        } else {
+            let combined = NSMutableAttributedString()
+            for (idx, msg) in messages.enumerated() {
+                combined.append(attributedString(for: msg))
+                if idx < messages.count - 1 {
+                    combined.append(NSAttributedString(string: "\n", attributes: baseAttributes()))
+                }
+            }
+            storage.setAttributedString(combined)
+        }
+
+        // Single bookkeeping exit point keeps the next diff accurate.
+        coordinator.lastRenderedIDs = newIDs
+        coordinator.renderedThumbFingerprints = Dictionary(
+            newIDs.map { ($0, thumbnailFingerprint(for: $0)) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// Base attributes for plain text and inter-message separators (label color, shared paragraph style).
+    private func baseAttributes() -> [NSAttributedString.Key: Any] {
+        [
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .paragraphStyle: Self.sharedParagraphStyle,
+            .foregroundColor: NSColor.labelColor
+        ]
+    }
+
+    /// Stable fingerprint of a message's thumbnails (count + how many images have loaded).
+    /// Mirrors the per-message hashing in updateNSView's signature so a thumbnail load both
+    /// invalidates the signature AND forces that message to be re-rendered via full rebuild.
+    private func thumbnailFingerprint(for id: UUID) -> Int {
+        guard showThumbnails else { return 0 }
+        let arr = thumbnailsByMessage[id] ?? []
+        var fp = arr.count
+        let loaded = arr.reduce(0) { $0 + ($1.image == nil ? 0 : 1) }
+        fp = fp &* 31 &+ loaded
+        return fp
+    }
+
+    /// Renders ONE message (time + nick/body or plain text + optional thumbnail block) WITHOUT
+    /// a trailing inter-message newline. Shared by the full-rebuild and append paths so the two
+    /// produce byte-identical output for the same message.
+    private func attributedString(for msg: ChatMessage) -> NSAttributedString {
         let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
@@ -588,76 +671,72 @@ private struct LogTextView: NSViewRepresentable {
             .paragraphStyle: Self.sharedParagraphStyle,
             .foregroundColor: NSColor(calibratedHue: 0.13, saturation: 0.75, brightness: 0.55, alpha: 1.0)
         ]
+        let detector = Self.sharedLinkDetector
 
         let combined = NSMutableAttributedString()
-        let detector = Self.sharedLinkDetector
-        for (idx, msg) in messages.enumerated() {
-            // Time, without brackets, gray
-            let timeStr = "\(Formatting.timeString(msg.time)) "
-            combined.append(NSAttributedString(string: timeStr, attributes: grayAttrs))
+        // Time, without brackets, gray
+        let timeStr = "\(Formatting.timeString(msg.time)) "
+        combined.append(NSAttributedString(string: timeStr, attributes: grayAttrs))
 
-            if msg.isPrivmsg, let nick = msg.senderNick {
-                // Chat line: colored nick, gray colon, body in black
-                let isMine = msg.isFromMe || (myNick != nil && nick.compare(myNick!, options: .caseInsensitive) == .orderedSame)
-                combined.append(NSAttributedString(string: nick, attributes: isMine ? myNickAttrs : otherNickAttrs))
-                combined.append(NSAttributedString(string: ": ", attributes: grayAttrs))
+        if msg.isPrivmsg, let nick = msg.senderNick {
+            // Chat line: colored nick, gray colon, body in label color
+            let isMine = msg.isFromMe || (myNick != nil && nick.compare(myNick!, options: .caseInsensitive) == .orderedSame)
+            combined.append(NSAttributedString(string: nick, attributes: isMine ? myNickAttrs : otherNickAttrs))
+            combined.append(NSAttributedString(string: ": ", attributes: grayAttrs))
 
-                let bodyStr = msg.text
-                let bodyAttr = NSMutableAttributedString(string: bodyStr, attributes: attrs)
-                if let detector {
-                    let nsBody = bodyStr as NSString
-                    let bodyRange = NSRange(location: 0, length: nsBody.length)
-                    detector.enumerateMatches(in: bodyStr, options: [], range: bodyRange) { result, _, _ in
-                        guard let result, let url = result.url else { return }
-                        bodyAttr.addAttribute(.link, value: url, range: result.range)
-                    }
-                }
-                combined.append(bodyAttr)
-            } else {
-                // Non-chat line: keep as-is (black), but still detect links
-                let text = msg.text
-                let plain = NSMutableAttributedString(string: text, attributes: attrs)
-                if let detector {
-                    let nsText = text as NSString
-                    let fullRange = NSRange(location: 0, length: nsText.length)
-                    detector.enumerateMatches(in: text, options: [], range: fullRange) { result, _, _ in
-                        guard let result, let url = result.url else { return }
-                        plain.addAttribute(.link, value: url, range: result.range)
-                    }
-                }
-                combined.append(plain)
-            }
-            
-            if showThumbnails, let thumbs = thumbnailsByMessage[msg.id], !thumbs.isEmpty {
-                combined.append(NSAttributedString(string: "\n", attributes: attrs))
-                for (i, item) in thumbs.enumerated() {
-                    // Create image attachment with max size of 200x200 logical pixels
-                    let maxSize = NSSize(width: 200, height: 200)
-                    let attachment: NSTextAttachment
-                    
-                    if let img = item.image {
-                        // Real image - use actual prepared size
-                        attachment = makeImageAttachment(img, maxSize: maxSize)
-                    } else {
-                        // Placeholder - reserve exact space that the image will occupy
-                        // Use a fixed aspect ratio or default size to prevent layout shift
-                        let placeholderSize = NSSize(width: 200, height: 150) // 4:3 aspect ratio placeholder
-                        let placeholder = NSImage(size: placeholderSize)
-                        attachment = RetinaImageAttachment(image: placeholder, displaySize: placeholderSize)
-                    }
-                    
-                    let attStr = NSMutableAttributedString(attachment: attachment)
-                    let range = NSRange(location: 0, length: attStr.length)
-                    attStr.addAttribute(.link, value: item.url, range: range)
-                    attStr.addAttribute(.underlineStyle, value: 0, range: range)
-                    combined.append(attStr)
-                    if i < thumbs.count - 1 { combined.append(NSAttributedString(string: "\n", attributes: attrs)) }
+            let bodyStr = msg.text
+            let bodyAttr = NSMutableAttributedString(string: bodyStr, attributes: attrs)
+            if let detector {
+                let nsBody = bodyStr as NSString
+                let bodyRange = NSRange(location: 0, length: nsBody.length)
+                detector.enumerateMatches(in: bodyStr, options: [], range: bodyRange) { result, _, _ in
+                    guard let result, let url = result.url else { return }
+                    bodyAttr.addAttribute(.link, value: url, range: result.range)
                 }
             }
-            if idx < messages.count - 1 { combined.append(NSAttributedString(string: "\n", attributes: attrs)) }
+            combined.append(bodyAttr)
+        } else {
+            // Non-chat line: keep as-is (label color), but still detect links
+            let text = msg.text
+            let plain = NSMutableAttributedString(string: text, attributes: attrs)
+            if let detector {
+                let nsText = text as NSString
+                let fullRange = NSRange(location: 0, length: nsText.length)
+                detector.enumerateMatches(in: text, options: [], range: fullRange) { result, _, _ in
+                    guard let result, let url = result.url else { return }
+                    plain.addAttribute(.link, value: url, range: result.range)
+                }
+            }
+            combined.append(plain)
         }
 
-        textView.textStorage?.setAttributedString(combined)
+        if showThumbnails, let thumbs = thumbnailsByMessage[msg.id], !thumbs.isEmpty {
+            combined.append(NSAttributedString(string: "\n", attributes: attrs))
+            for (i, item) in thumbs.enumerated() {
+                // Create image attachment with max size of 200x200 logical pixels
+                let maxSize = NSSize(width: 200, height: 200)
+                let attachment: NSTextAttachment
+
+                if let img = item.image {
+                    // Real image - use actual prepared size
+                    attachment = makeImageAttachment(img, maxSize: maxSize)
+                } else {
+                    // Placeholder - reserve exact space that the image will occupy
+                    // Use a fixed aspect ratio or default size to prevent layout shift
+                    let placeholderSize = NSSize(width: 200, height: 150) // 4:3 aspect ratio placeholder
+                    let placeholder = NSImage(size: placeholderSize)
+                    attachment = RetinaImageAttachment(image: placeholder, displaySize: placeholderSize)
+                }
+
+                let attStr = NSMutableAttributedString(attachment: attachment)
+                let range = NSRange(location: 0, length: attStr.length)
+                attStr.addAttribute(.link, value: item.url, range: range)
+                attStr.addAttribute(.underlineStyle, value: 0, range: range)
+                combined.append(attStr)
+                if i < thumbs.count - 1 { combined.append(NSAttributedString(string: "\n", attributes: attrs)) }
+            }
+        }
+        return combined
     }
 
     private func isAtBottom(textView: NSTextView, scrollView: NSScrollView) -> Bool {
@@ -944,6 +1023,7 @@ struct SidebarItem: Identifiable, Hashable {
 
 struct PreferencesView: View {
     @Environment(AppPreferences.self) private var prefs
+    @Environment(ChatStore.self) private var model
 
     private var numberFormatter: NumberFormatter {
         let f = NumberFormatter()
@@ -970,6 +1050,11 @@ struct PreferencesView: View {
                     Toggle("", isOn: Binding(get: { prefs.showImageThumbnails }, set: { prefs.showImageThumbnails = $0 }))
                         .labelsHidden()
                 }
+                GridRow {
+                    Text("Log raw server traffic (debug):")
+                    Toggle("", isOn: Binding(get: { prefs.debugRawServerLog }, set: { prefs.debugRawServerLog = $0; model.syncPreferencesToServices() }))
+                        .labelsHidden()
+                }
             }
             Spacer(minLength: 0)
         }
@@ -987,8 +1072,11 @@ struct ServerEditorView: View {
     @State private var password: String = ""
     @State private var useTLS: Bool = false
     @State private var autoConnectOnLaunch: Bool = false
+    @State private var nickname: String = ""
     private var validPort: Int? { Int(port).flatMap { (1...65535).contains($0) ? $0 : nil } }
-    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil }
+    private var trimmedNick: String { nickname.trimmingCharacters(in: .whitespaces) }
+    private var nickIsValid: Bool { trimmedNick.isEmpty || IRCNickName(trimmedNick) != nil }
+    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil && nickIsValid }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add Server").font(.headline)
@@ -997,6 +1085,7 @@ struct ServerEditorView: View {
                 GridRow { Text("Server:"); TextField("irc.example.net", text: $host).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Port:"); TextField("6667", text: $port).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Password:"); SecureField("Optional", text: $password).textFieldStyle(.roundedBorder) }
+                GridRow { Text("Nickname:"); TextField("Optional (uses default if blank)", text: $nickname).textFieldStyle(.roundedBorder) }
                 GridRow {
                     Text("Use SSL/TLS:")
                     Toggle("", isOn: $useTLS)
@@ -1019,7 +1108,8 @@ struct ServerEditorView: View {
                 Button("Save") {
                     guard let p = validPort else { return }
                     let pwd: String? = password.isEmpty ? nil : password
-                    model.addServer(name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch)
+                    let nick: String? = trimmedNick.isEmpty ? nil : trimmedNick
+                    model.addServer(name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -1041,8 +1131,11 @@ struct EditServerView: View {
     @State private var password: String = ""
     @State private var useTLS: Bool = false
     @State private var autoConnectOnLaunch: Bool = false
+    @State private var nickname: String = ""
     private var validPort: Int? { Int(port).flatMap { (1...65535).contains($0) ? $0 : nil } }
-    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil }
+    private var trimmedNick: String { nickname.trimmingCharacters(in: .whitespaces) }
+    private var nickIsValid: Bool { trimmedNick.isEmpty || IRCNickName(trimmedNick) != nil }
+    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil && nickIsValid }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Edit Server").font(.headline)
@@ -1051,6 +1144,7 @@ struct EditServerView: View {
                 GridRow { Text("Server:"); TextField("irc.example.net", text: $host).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Port:"); TextField("6667", text: $port).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Password:"); SecureField("Optional", text: $password).textFieldStyle(.roundedBorder) }
+                GridRow { Text("Nickname:"); TextField("Optional (uses default if blank)", text: $nickname).textFieldStyle(.roundedBorder) }
                 GridRow {
                     Text("Use SSL/TLS:")
                     Toggle("", isOn: $useTLS)
@@ -1073,7 +1167,8 @@ struct EditServerView: View {
                 Button("Save") {
                     guard let p = validPort else { return }
                     let pwd: String? = password.isEmpty ? nil : password
-                    model.updateServer(id: server.id, name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch)
+                    let nick: String? = trimmedNick.isEmpty ? nil : trimmedNick
+                    model.updateServer(id: server.id, name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -1087,6 +1182,7 @@ struct EditServerView: View {
             password = server.password ?? ""
             useTLS = server.useTLS
             autoConnectOnLaunch = server.autoConnectOnLaunch
+            nickname = server.nickname ?? ""
         }
         .padding(16)
         .frame(width: 420)
