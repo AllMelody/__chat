@@ -466,7 +466,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
 
         server.channels.removeAll { $0.id == channel.id }
-        server.log.append(ChatMessage(time: Date(), text: "Parted \(channel.name)"))
+        let msg = ChatMessage(time: Date(), text: "Parted \(channel.name)")
+        server.log.append(msg)
+        delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
     }
     
     // MARK: - Topic

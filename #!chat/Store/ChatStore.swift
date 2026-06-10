@@ -73,7 +73,11 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func disconnect(_ server: IRCServer) {
+        // The service drops the server's channel list wholesale; release the thumbnail
+        // state those logs were holding once the channels are gone.
+        let channels = server.channels
         connectionService.disconnect(server)
+        for channel in channels { discardThumbnails(for: channel.log) }
     }
     
     // MARK: - Channels
@@ -85,6 +89,11 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func partChannel(_ channel: IRCChannel) {
         guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
         connectionService.partChannel(channel, from: server)
+        // The service removes the channel only when the PART was actually sent (it keeps the
+        // channel when not connected/registered); if it's gone, drop its thumbnail state.
+        if !server.channels.contains(where: { $0.id == channel.id }) {
+            discardThumbnails(for: channel.log)
+        }
     }
     
     func setTopic(_ topic: String, on channel: IRCChannel) {
@@ -98,9 +107,10 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func closePrivateMessage(_ pm: IRCPrivateMessage, from server: IRCServer) {
+        discardThumbnails(for: pm.log)
         server.privateMessages.removeAll { $0.id == pm.id }
         server.log.append(ChatMessage(time: Date(), text: "Closed conversation with \(pm.nickname)"))
-        logVersion &+= 1
+        noteLogsChanged()
     }
     
     // MARK: - Messaging
@@ -135,9 +145,15 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     
     func deleteServer(_ server: IRCServer) {
         let deletingSelected = (selectedNodeID == server.id)
+        let channels = server.channels
+        let pms = server.privateMessages
         connectionService.disconnect(server)
         try! keychain.delete(for: server.id)
         servers.removeAll { $0.id == server.id }
+        // Every log this server owned is going away; release their thumbnail state.
+        discardThumbnails(for: server.log)
+        for channel in channels { discardThumbnails(for: channel.log) }
+        for pm in pms { discardThumbnails(for: pm.log) }
         if deletingSelected { selectedNodeID = servers.first?.id }
     }
     
@@ -182,7 +198,60 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         return true
     }
-    
+
+    // MARK: - Log Trimming
+
+    /// Pure trim step (static so it can be unit-tested, like `MessageRouter.parse`): once a
+    /// log grows past `cap + slack`, returns the kept tail of exactly `cap` messages plus the
+    /// dropped overflow; returns nil while within bounds. The slack batches the O(n) front
+    /// removal so it doesn't run on every single append once a log sits at the cap.
+    static func trimOverflow(of log: [ChatMessage], cap: Int, slack: Int) -> (kept: [ChatMessage], dropped: [ChatMessage])? {
+        let cap = max(1, cap)
+        guard log.count > cap + max(0, slack) else { return nil }
+        return (kept: Array(log.suffix(cap)), dropped: Array(log.prefix(log.count - cap)))
+    }
+
+    /// Enforces the maxLogLines preference on every log array (server, channel, PM) and
+    /// releases thumbnail state for the dropped messages. Without this, logs and thumbnails
+    /// grew without bound for the lifetime of the process — only the *display* was capped.
+    /// Cheap when nothing overflowed (one count check per node), so it runs on every log
+    /// mutation via noteLogsChanged().
+    func trimLogs() {
+        let cap = max(1, preferences?.maxLogLines ?? 1000)
+        let slack = max(32, cap / 10)
+        // Assign back only when something was dropped, so @Observable setters (and the
+        // SwiftUI invalidation they trigger) fire only on real changes.
+        func apply(_ log: [ChatMessage], _ assign: ([ChatMessage]) -> Void) {
+            guard let t = Self.trimOverflow(of: log, cap: cap, slack: slack) else { return }
+            assign(t.kept)
+            discardThumbnails(for: t.dropped)
+        }
+        for server in servers {
+            apply(server.log) { server.log = $0 }
+            for channel in server.channels { apply(channel.log) { channel.log = $0 } }
+            for pm in server.privateMessages { apply(pm.log) { pm.log = $0 } }
+        }
+    }
+
+    /// Single funnel for "some log array was mutated": bumps the view-invalidation counter
+    /// and enforces the log cap. Every append path ends up here, directly or via a delegate
+    /// callback.
+    private func noteLogsChanged() {
+        logVersion &+= 1
+        trimLogs()
+    }
+
+    /// Drops per-message thumbnail state — both the @Observable mirror driving the views and
+    /// the copy inside ImageCacheService — for messages that left a log (trimmed past the cap,
+    /// or removed along with their channel/PM/server).
+    private func discardThumbnails(for messages: [ChatMessage]) {
+        guard !messages.isEmpty else { return }
+        for message in messages {
+            messageThumbnails.removeValue(forKey: message.id)
+        }
+        imageCache.discardThumbnails(for: messages.map(\.id))
+    }
+
     // MARK: - Persistence
     
     private let serversPersistenceKey = "PersistedServers.v1"
@@ -237,7 +306,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     // MARK: - IRCConnectionServiceDelegate
     
     func ircConnectionService(_ service: IRCConnectionService, didAppendMessage message: ChatMessage, to server: IRCServer) {
-        logVersion &+= 1
+        noteLogsChanged()
         if message.isPrivmsg {
             scanMessageForThumbnails(message)
         }
@@ -251,7 +320,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
                                  server.connectionStatus == .reconnectionFailed
             if server.shouldAutoReconnect && isDisconnected {
                 server.log.append(ChatMessage(time: Date(), text: "Network available, reconnecting..."))
-                logVersion &+= 1
+                noteLogsChanged()
                 connectionService.resetReconnectionAttempts(for: server)
                 connect(server)
             }
@@ -261,7 +330,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     // MARK: - MessageRouterDelegate
 
     func messageRouter(_ router: MessageRouter, didAppendMessage message: ChatMessage) {
-        logVersion &+= 1
+        noteLogsChanged()
         scanMessageForThumbnails(message)
     }
     
@@ -272,7 +341,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         server.connectionStatus = .connectionTimeout
         server.log.append(ChatMessage(time: Date(), text: "Connection to \(server.name) lost"))
-        logVersion &+= 1
+        noteLogsChanged()
 
         if server.shouldAutoReconnect {
             connectionService.scheduleReconnection(for: server)
@@ -290,7 +359,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             "Registered as \(nick)"
         let message = ChatMessage(time: Date(), text: statusText)
         server.log.append(message)
-        logVersion &+= 1
+        noteLogsChanged()
         scanMessageForThumbnails(message)
 
         connectionService.resetReconnectionAttempts(for: server)
@@ -310,7 +379,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         let message = ChatMessage(time: Date(), text: "Failed to register with server")
         server.log.append(message)
-        logVersion &+= 1
+        noteLogsChanged()
         scanMessageForThumbnails(message)
 
         if server.shouldAutoReconnect {
@@ -346,7 +415,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         server.currentNick = nick
         let message = ChatMessage(time: Date(), text: "You are now known as \(nick)")
         server.log.append(message)
-        logVersion &+= 1
+        noteLogsChanged()
         scanMessageForThumbnails(message)
     }
     
@@ -385,7 +454,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
                 pm.unreadCount += 1
             }
         }
-        logVersion &+= 1
+        noteLogsChanged()
     }
     
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool) {
@@ -399,7 +468,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             let message = ChatMessage(time: Date(), text: "Joined \(channel)")
             channelObj.log.append(message)
             server.log.append(message)
-            logVersion &+= 1
+            noteLogsChanged()
         }
     }
 
@@ -411,11 +480,13 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
                 let message = ChatMessage(time: Date(), text: "Parted \(channel)")
                 channelObj.log.append(message)
                 channelObj.joined = false
+                // Channel is removed below; release the thumbnail state its log was holding.
+                discardThumbnails(for: channelObj.log)
             }
             server.channels.removeAll { $0.name.caseInsensitiveCompare(channel) == .orderedSame }
             let message = ChatMessage(time: Date(), text: "Parted \(channel)")
             server.log.append(message)
-            logVersion &+= 1
+            noteLogsChanged()
         } else if let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) {
             channelObj.removeUser(nick)
         }
@@ -452,7 +523,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         }
         let message = ChatMessage(time: Date(), text: logText)
         channelObj.log.append(message)
-        logVersion &+= 1
+        noteLogsChanged()
     }
 
     func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID) {
@@ -475,7 +546,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         }
 
         server.log.append(nickMessage)
-        logVersion &+= 1
+        noteLogsChanged()
     }
 
     func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?) {
@@ -494,6 +565,6 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         }
 
         server.log.append(logMessage)
-        logVersion &+= 1
+        noteLogsChanged()
     }
 }

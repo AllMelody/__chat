@@ -145,6 +145,16 @@ final class ImageCacheService {
     
     // MARK: - Thumbnail Processing
 
+    /// Forgets the in-memory thumbnail entries (and the NSImages they hold strongly) for
+    /// messages that no longer exist — trimmed past the log cap, or removed along with their
+    /// channel/PM/server. The NSCache and disk caches are untouched: they're URL-keyed and
+    /// bounded on their own.
+    func discardThumbnails(for messageIDs: [UUID]) {
+        for id in messageIDs {
+            messageThumbnails.removeValue(forKey: id)
+        }
+    }
+
     func scanMessageForThumbnails(_ message: ChatMessage, showImageThumbnails: Bool) {
         guard showImageThumbnails else { return }
         guard let detector = linkDetector else { return }

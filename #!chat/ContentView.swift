@@ -1038,10 +1038,12 @@ struct PreferencesView: View {
                 GridRow {
                     Text("Number of lines to keep in log:")
                     HStack(spacing: 8) {
-                        TextField("Lines", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0) }), formatter: numberFormatter)
+                        // trimLogs() applies a lowered cap to stored logs immediately;
+                        // otherwise memory is only reclaimed on the next received message.
+                        TextField("Lines", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), formatter: numberFormatter)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
-                        Stepper("", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0) }), in: 1...100000)
+                        Stepper("", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), in: 1...100000)
                             .labelsHidden()
                     }
                 }
