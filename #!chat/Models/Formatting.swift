@@ -38,4 +38,36 @@ enum Formatting {
             return yearDateTimeFormatter.string(from: date)
         }
     }
+
+    // MARK: - Nick mention (highlight) detection
+
+    /// Characters that can be part of an IRC nickname (RFC 2812: letters, digits, and
+    /// []\`_^{|}- specials). A candidate match is a real mention only when the characters
+    /// around it are NOT nick characters — "AllMelody:" mentions AllMelody, but
+    /// "AllMelody_" is somebody else entirely.
+    private static let nickCharacters: CharacterSet = {
+        var set = CharacterSet.alphanumerics
+        set.insert(charactersIn: "[]\\`_^{|}-")
+        return set
+    }()
+
+    private static func isNickCharacter(_ ch: Character) -> Bool {
+        ch.unicodeScalars.allSatisfy { nickCharacters.contains($0) }
+    }
+
+    /// True when `text` mentions `nick` as a standalone word (case-insensitive).
+    static func mentionsNick(_ nick: String, in text: String) -> Bool {
+        guard !nick.isEmpty else { return false }
+        var searchRange = text.startIndex..<text.endIndex
+        while let found = text.range(of: nick, options: [.caseInsensitive], range: searchRange) {
+            let beforeOK = found.lowerBound == text.startIndex
+                || !isNickCharacter(text[text.index(before: found.lowerBound)])
+            let afterOK = found.upperBound == text.endIndex
+                || !isNickCharacter(text[found.upperBound])
+            if beforeOK && afterOK { return true }
+            guard found.upperBound < text.endIndex else { break }
+            searchRange = text.index(after: found.lowerBound)..<text.endIndex
+        }
+        return false
+    }
 }

@@ -25,54 +25,28 @@ struct ContentView: View {
 
     private func validateSelection() {
         let all = allNodesFlat
-        // More robust selection validation
-        if let currentID = model.selectedNodeID {
-            // Check if current selection still exists
-            if !all.contains(where: { $0.id == currentID }) {
-                // Try to select the first server, then first available node
-                model.selectedNodeID = model.servers.first?.id ?? all.first?.id
-            }
-        } else {
-            // No selection, pick first available
+        let selectionIsValid = model.selectedNodeID.map { id in all.contains { $0.id == id } } ?? false
+        if !selectionIsValid {
             model.selectedNodeID = model.servers.first?.id ?? all.first?.id
         }
     }
-    
-    private func navigateUp() {
+
+    /// Moves the sidebar selection by `offset` (wrapping). Entering a conversation this
+    /// way counts as reading it, so its unread badge clears.
+    private func navigate(by offset: Int) {
         let all = allNodesFlat
         guard !all.isEmpty else { return }
-        
-        if let currentID = model.selectedNodeID,
-           let currentIndex = all.firstIndex(where: { $0.id == currentID }) {
-            let newIndex = currentIndex > 0 ? currentIndex - 1 : all.count - 1
-            model.selectedNodeID = all[newIndex].id
-            // Clear unread count if selecting a channel or private message
-            if case .channel(let channel) = all[newIndex].kind {
-                channel.unreadCount = 0
-            } else if case .privateMessage(let pm) = all[newIndex].kind {
-                pm.unreadCount = 0
-            }
-        } else {
+        guard let currentID = model.selectedNodeID,
+              let currentIndex = all.firstIndex(where: { $0.id == currentID }) else {
             model.selectedNodeID = all.first?.id
+            return
         }
-    }
-    
-    private func navigateDown() {
-        let all = allNodesFlat
-        guard !all.isEmpty else { return }
-        
-        if let currentID = model.selectedNodeID,
-           let currentIndex = all.firstIndex(where: { $0.id == currentID }) {
-            let newIndex = currentIndex < all.count - 1 ? currentIndex + 1 : 0
-            model.selectedNodeID = all[newIndex].id
-            // Clear unread count if selecting a channel or private message
-            if case .channel(let channel) = all[newIndex].kind {
-                channel.unreadCount = 0
-            } else if case .privateMessage(let pm) = all[newIndex].kind {
-                pm.unreadCount = 0
-            }
-        } else {
-            model.selectedNodeID = all.first?.id
+        let item = all[(currentIndex + offset + all.count) % all.count]
+        model.selectedNodeID = item.id
+        if case .channel(let channel) = item.kind {
+            channel.unreadCount = 0
+        } else if case .privateMessage(let pm) = item.kind {
+            pm.unreadCount = 0
         }
     }
 
@@ -92,10 +66,10 @@ struct ContentView: View {
             .onChange(of: activeState) { _, new in if new == .key { focusComposer() } }
             .onChange(of: model.selectedNodeID) { _, _ in focusComposer() }
             .onReceive(NotificationCenter.default.publisher(for: .navigateUp)) { _ in
-                navigateUp()
+                navigate(by: -1)
             }
             .onReceive(NotificationCenter.default.publisher(for: .navigateDown)) { _ in
-                navigateDown()
+                navigate(by: 1)
             }
 
         let addServerBinding = Binding(get: { model.isPresentingAddServer }, set: { model.isPresentingAddServer = $0 })
@@ -104,12 +78,12 @@ struct ContentView: View {
         let topicEditorBinding = Binding(get: { model.isPresentingTopicEditor }, set: { model.isPresentingTopicEditor = $0 })
 
         return viewWithStateChanges
-            .sheet(isPresented: addServerBinding) { ServerEditorView() }
+            .sheet(isPresented: addServerBinding) { ServerFormView() }
             .sheet(isPresented: joinChannelBinding) { JoinChannelView() }
             .sheet(isPresented: editServerBinding) {
                 Group {
                     if let server = model.server(withID: model.pendingEditServerID) {
-                        EditServerView(server: server)
+                        ServerFormView(server: server)
                     } else {
                         Text("No server selected")
                             .padding(16)
@@ -138,8 +112,10 @@ struct ContentView: View {
                     .onTapGesture { model.isPresentingTopicEditor = true }
                 Divider()
             }
-            LogView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
-                .padding(.leading, 4)
+            // No leading padding here: the log's left gutter comes from the text view's
+            // container inset, so highlight washes can run edge to edge.
+            LogTextView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, 2)
 
             Divider()
@@ -205,18 +181,20 @@ struct ContentView: View {
                         )
                         separator()
                         ForEach(server.channels, id: \.id) { ch in
-                            ChannelRow(
-                                channel: ch,
+                            ConversationRow(
+                                node: SidebarItem(kind: .channel(ch)),
+                                unreadCount: ch.unreadCount,
                                 isSelected: model.selectedNodeID == ch.id,
                                 rowHeight: rowHeight,
                                 iconColWidth: iconColWidth,
                                 indentWidth: indentWidth,
                                 activeState: activeState,
+                                menuTitle: "Part Channel",
                                 select: {
                                     ch.unreadCount = 0
                                     model.selectedNodeID = ch.id
                                 },
-                                part: {
+                                menuAction: {
                                     let wasSelected = (model.selectedNodeID == ch.id)
                                     model.partChannel(ch)
                                     if wasSelected { model.selectedNodeID = server.id }
@@ -225,18 +203,20 @@ struct ContentView: View {
                             if ch.id != server.channels.last?.id || !server.privateMessages.isEmpty { separator() }
                         }
                         ForEach(server.privateMessages, id: \.id) { pm in
-                            PrivateMessageRow(
-                                privateMessage: pm,
+                            ConversationRow(
+                                node: SidebarItem(kind: .privateMessage(pm)),
+                                unreadCount: pm.unreadCount,
                                 isSelected: model.selectedNodeID == pm.id,
                                 rowHeight: rowHeight,
                                 iconColWidth: iconColWidth,
                                 indentWidth: indentWidth,
                                 activeState: activeState,
+                                menuTitle: "Close Conversation",
                                 select: {
                                     pm.unreadCount = 0
                                     model.selectedNodeID = pm.id
                                 },
-                                close: {
+                                menuAction: {
                                     let wasSelected = (model.selectedNodeID == pm.id)
                                     model.closePrivateMessage(pm, from: server)
                                     if wasSelected { model.selectedNodeID = server.id }
@@ -288,8 +268,8 @@ private struct ComposerTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
 
-    /// The display string shown in the text field: newlines replaced with ` ⏎ ` so the field stays one line.
-    /// The binding `text` keeps the real newlines for sending.
+    /// The display string shown in the text field: newlines replaced with a literal ` \n `
+    /// so the field stays one line. The binding `text` keeps the real newlines for sending.
     private static let newlineSymbol = " \\n "
     private static let newlineSymbolColor = NSColor.secondaryLabelColor
 
@@ -308,7 +288,7 @@ private struct ComposerTextField: NSViewRepresentable {
         let fullRange = NSRange(location: 0, length: storage.length)
         // Reset foreground color to default (prevents color bleed from typing near symbols)
         storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
-        // Apply teal color to each newline symbol
+        // Color each newline symbol
         let text = storage.string as NSString
         var searchRange = NSRange(location: 0, length: text.length)
         while searchRange.location < text.length {
@@ -345,7 +325,8 @@ private struct ComposerTextField: NSViewRepresentable {
                 tf.stringValue = flat
                 ComposerTextField.colorizeNewlineSymbols(in: tf)
                 if let editor = tf.currentEditor() {
-                    editor.selectedRange = NSRange(location: flat.count, length: 0)
+                    // NSRange is UTF-16 based; String.count is off once the text has emoji.
+                    editor.selectedRange = NSRange(location: (flat as NSString).length, length: 0)
                 }
                 parent.text = raw
             } else {
@@ -370,15 +351,27 @@ private struct ComposerTextField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSTextField {
         let tf = NSTextField()
-        tf.placeholderString = placeholder
         tf.isBordered = false
         tf.drawsBackground = false
         tf.focusRingType = .none
         tf.font = .systemFont(ofSize: NSFont.systemFontSize)
+        // Fixed-baseline single-line layout. Without this, the unfocused cell measures text
+        // via the multiline path while the focused field editor uses single-line metrics,
+        // and the sub-pixel disagreement makes the text/placeholder shift on focus change.
+        tf.usesSingleLineMode = true
         tf.lineBreakMode = .byTruncatingTail
         tf.maximumNumberOfLines = 1
         tf.cell?.wraps = false
         tf.cell?.isScrollable = true
+        // Explicit attributes so the focused and unfocused draw paths use identical
+        // font/metrics for the placeholder instead of each deriving their own defaults.
+        let placeholderParagraph = NSMutableParagraphStyle()
+        placeholderParagraph.lineBreakMode = .byTruncatingTail
+        tf.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .foregroundColor: NSColor.placeholderTextColor,
+            .paragraphStyle: placeholderParagraph
+        ])
         tf.delegate = context.coordinator
         tf.translatesAutoresizingMaskIntoConstraints = false
         tf.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -404,17 +397,32 @@ private struct ComposerTextField: NSViewRepresentable {
     }
 }
 
-struct LogView: View {
-    let logVersion: Int
-    let selectionToken: UUID?
-    let messages: [ChatMessage]
-    let thumbnailsByMessage: [UUID: [MessageThumbnail]]
-    let showThumbnails: Bool
-    let myNick: String?
+extension NSAttributedString.Key {
+    /// Marks the text of a nick-mention line; the value is the wash NSColor. Drawn by
+    /// LogLayoutManager across the full line width instead of just behind the glyphs.
+    static let ircHighlightLine = NSAttributedString.Key("ircHighlightLine")
+}
 
-    var body: some View {
-        LogTextView(logVersion: logVersion, selectionToken: selectionToken, messages: messages, thumbnailsByMessage: thumbnailsByMessage, showThumbnails: showThumbnails, myNick: myNick)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+/// TextKit 1 layout manager for the chat log. For ranges tagged .ircHighlightLine it fills
+/// each line fragment edge to edge with the marker's color, underneath normal background
+/// and selection drawing (super runs after, so selection stays visible on top).
+private final class LogLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        if let storage = textStorage, let textView = textContainers.first?.textView {
+            let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+            storage.enumerateAttribute(.ircHighlightLine, in: charRange, options: []) { value, range, _ in
+                guard let color = value as? NSColor else { return }
+                color.setFill()
+                let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                self.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, _, _ in
+                    // Full view width on purpose (not the fragment rect), so the wash also
+                    // covers the container inset gutters.
+                    NSRect(x: 0, y: rect.minY + origin.y, width: textView.bounds.width, height: rect.height)
+                        .fill(using: .sourceOver)
+                }
+            }
+        }
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
     }
 }
 
@@ -428,7 +436,6 @@ private struct LogTextView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var lastSelectionToken: UUID?
-        var lastMessageCount: Int = 0
         var isPinnedToBottom: Bool = true
         var boundsObserver: Any?
         var frameObserver: Any?
@@ -474,16 +481,31 @@ private struct LogTextView: NSViewRepresentable {
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
 
-        let textView = NSTextView(frame: .zero)
+        // Explicit TextKit 1 stack so the view uses LogLayoutManager (which draws nick
+        // highlights edge to edge). NSTextView(frame:) would build a TextKit 2 view whose
+        // compatibility-mode layout manager we can't substitute.
+        let textStorage = NSTextStorage()
+        let layoutManager = LogLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        textContainer.lineFragmentPadding = 0
+        layoutManager.addTextContainer(textContainer)
+
+        let textView = NSTextView(frame: .zero, textContainer: textContainer)
+        // The designated initializer doesn't apply the convenience init's sizing defaults;
+        // without a huge maxSize the view can't grow with its content.
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.autoresizingMask = [.width]
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.textContainerInset = NSSize(width: 0, height: 2)
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.lineFragmentPadding = 0
+        // Horizontal inset is the log's left gutter; keeping it inside the text view lets
+        // highlight washes span the full view width.
+        textView.textContainerInset = NSSize(width: 4, height: 2)
         textView.usesFontPanel = false
         textView.usesFindBar = true
         textView.isContinuousSpellCheckingEnabled = false
@@ -498,22 +520,25 @@ private struct LogTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.scrollView = scroll
         scroll.contentView.postsBoundsChangedNotifications = true
-        context.coordinator.boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { _ in
-            guard let tv = context.coordinator.textView, let sv = context.coordinator.scrollView else { return }
-            context.coordinator.isPinnedToBottom = isAtBottom(textView: tv, scrollView: sv)
+        // Weak captures: the coordinator owns the observer tokens, and the tokens hold
+        // these closures — a strong capture would be a retain cycle that keeps the whole
+        // text-view stack alive and prevents deinit from ever removing the observers.
+        let coordinator = context.coordinator
+        coordinator.boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { [weak coordinator] _ in
+            guard let coordinator, let tv = coordinator.textView, let sv = coordinator.scrollView else { return }
+            coordinator.isPinnedToBottom = isAtBottom(textView: tv, scrollView: sv)
         }
         scroll.postsFrameChangedNotifications = true
-        context.coordinator.frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { _ in
-            guard let tv = context.coordinator.textView else { return }
-            if context.coordinator.isPinnedToBottom {
+        coordinator.frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak coordinator] _ in
+            guard let coordinator, let tv = coordinator.textView else { return }
+            if coordinator.isPinnedToBottom {
                 tv.scrollToEndOfDocument(nil)
             }
         }
-        apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: true)
+        apply(messages: messages, to: textView, coordinator: coordinator, forceFullRebuild: true)
         textView.scrollToEndOfDocument(nil)
-        context.coordinator.lastSelectionToken = selectionToken
-        context.coordinator.lastMessageCount = messages.count
-        context.coordinator.lastContentHeight = textView.bounds.height
+        coordinator.lastSelectionToken = selectionToken
+        coordinator.lastContentHeight = textView.bounds.height
         return scroll
     }
 
@@ -558,7 +583,6 @@ private struct LogTextView: NSViewRepresentable {
             CATransaction.commit()
         }
 
-        context.coordinator.lastMessageCount = messages.count
         context.coordinator.lastSelectionToken = selectionToken
         context.coordinator.lastContentHeight = newHeight
     }
@@ -573,6 +597,21 @@ private struct LogTextView: NSViewRepresentable {
     
     private static let sharedLinkDetector: NSDataDetector? = {
         try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    }()
+
+    /// Background for lines that mention our nick. systemYellow adapts to light/dark; the
+    /// alpha keeps label-colored text readable on top of it.
+    private static let highlightBackgroundColor = NSColor.systemYellow.withAlphaComponent(0.15)
+
+    /// Centers the glyphs inside the enforced minimumLineHeight. TextKit puts ALL of the
+    /// surplus fragment height above the ascender, so text sits at the bottom of its line
+    /// fragment — invisible normally, but lopsided once a highlight wash paints the full
+    /// fragment. Raising the baseline by half the surplus centers it. Applied to every text
+    /// run (not just highlighted ones) so all lines share the same baseline.
+    private static let textBaselineOffset: CGFloat = {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let natural = NSLayoutManager().defaultLineHeight(for: font)
+        return max(0, (sharedParagraphStyle.minimumLineHeight - natural) / 2)
     }()
     
     private func apply(messages: [ChatMessage], to textView: NSTextView, coordinator: Coordinator, forceFullRebuild: Bool) {
@@ -630,7 +669,8 @@ private struct LogTextView: NSViewRepresentable {
         [
             .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
             .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor.labelColor
+            .foregroundColor: NSColor.labelColor,
+            .baselineOffset: Self.textBaselineOffset
         ]
     }
 
@@ -651,25 +691,24 @@ private struct LogTextView: NSViewRepresentable {
     /// produce byte-identical output for the same message.
     private func attributedString(for msg: ChatMessage) -> NSAttributedString {
         let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor.labelColor
-        ]
+        let attrs = baseAttributes()
         let grayAttrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
             .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor.secondaryLabelColor
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .baselineOffset: Self.textBaselineOffset
         ]
         let myNickAttrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
             .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor(calibratedHue: 0.0, saturation: 0.75, brightness: 0.55, alpha: 1.0)
+            .foregroundColor: NSColor(calibratedHue: 0.0, saturation: 0.75, brightness: 0.55, alpha: 1.0),
+            .baselineOffset: Self.textBaselineOffset
         ]
         let otherNickAttrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
             .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor(calibratedHue: 0.13, saturation: 0.75, brightness: 0.55, alpha: 1.0)
+            .foregroundColor: NSColor(calibratedHue: 0.13, saturation: 0.75, brightness: 0.55, alpha: 1.0),
+            .baselineOffset: Self.textBaselineOffset
         ]
         let detector = Self.sharedLinkDetector
 
@@ -708,6 +747,14 @@ private struct LogTextView: NSViewRepresentable {
                 }
             }
             combined.append(plain)
+        }
+
+        // Marker consumed by LogLayoutManager, which paints the wash edge to edge across
+        // the text view (.backgroundColor would only paint behind the glyphs). Applied
+        // before the thumbnail block so it covers the mention line but not attached images.
+        if msg.isHighlight {
+            combined.addAttribute(.ircHighlightLine, value: Self.highlightBackgroundColor,
+                                  range: NSRange(location: 0, length: combined.length))
         }
 
         if showThumbnails, let thumbs = thumbnailsByMessage[msg.id], !thumbs.isEmpty {
@@ -924,22 +971,25 @@ struct ServerRow: View {
     }
 }
 
-struct ChannelRow: View {
-    let channel: IRCChannel
+/// Sidebar row for a channel or private message: icon with unread badge, name, and a
+/// single context-menu action (Part / Close).
+struct ConversationRow: View {
+    let node: SidebarItem
+    let unreadCount: Int
     let isSelected: Bool
     let rowHeight: CGFloat
     let iconColWidth: CGFloat
     let indentWidth: CGFloat
     let activeState: ControlActiveState
+    let menuTitle: String
     let select: () -> Void
-    let part: () -> Void
+    let menuAction: () -> Void
     var body: some View {
-        let node = SidebarItem(kind: .channel(channel))
         SidebarRowBase(isSelected: isSelected, indent: indentWidth, rowHeight: rowHeight, activeState: activeState) {
             Image(systemName: node.systemImageName)
                 .frame(width: iconColWidth, alignment: .center)
                 .overlay(alignment: .topTrailing) {
-                    if channel.unreadCount > 0 {
+                    if unreadCount > 0 {
                         Circle()
                             .fill(Color.accentColor)
                             .frame(width: 6, height: 6)
@@ -948,36 +998,7 @@ struct ChannelRow: View {
                 }
             Text(node.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
         }
-        .contextMenu { Button("Part Channel", action: part) }
-        .onTapGesture(perform: select)
-    }
-}
-
-struct PrivateMessageRow: View {
-    let privateMessage: IRCPrivateMessage
-    let isSelected: Bool
-    let rowHeight: CGFloat
-    let iconColWidth: CGFloat
-    let indentWidth: CGFloat
-    let activeState: ControlActiveState
-    let select: () -> Void
-    let close: () -> Void
-    var body: some View {
-        let node = SidebarItem(kind: .privateMessage(privateMessage))
-        SidebarRowBase(isSelected: isSelected, indent: indentWidth, rowHeight: rowHeight, activeState: activeState) {
-            Image(systemName: node.systemImageName)
-                .frame(width: iconColWidth, alignment: .center)
-                .overlay(alignment: .topTrailing) {
-                    if privateMessage.unreadCount > 0 {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 6, height: 6)
-                            .offset(x: 2, y: -2)
-                    }
-                }
-            Text(node.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
-        }
-        .contextMenu { Button("Close Conversation", action: close) }
+        .contextMenu { Button(menuTitle, action: menuAction) }
         .onTapGesture(perform: select)
     }
 }
@@ -1025,12 +1046,12 @@ struct PreferencesView: View {
     @Environment(AppPreferences.self) private var prefs
     @Environment(ChatStore.self) private var model
 
-    private var numberFormatter: NumberFormatter {
+    private static let numberFormatter: NumberFormatter = {
         let f = NumberFormatter()
         f.numberStyle = .decimal
         f.minimum = 1
         return f
-    }
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1040,7 +1061,7 @@ struct PreferencesView: View {
                     HStack(spacing: 8) {
                         // trimLogs() applies a lowered cap to stored logs immediately;
                         // otherwise memory is only reclaimed on the next received message.
-                        TextField("Lines", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), formatter: numberFormatter)
+                        TextField("Lines", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), formatter: Self.numberFormatter)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
                         Stepper("", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), in: 1...100000)
@@ -1065,9 +1086,12 @@ struct PreferencesView: View {
     }
 }
 
-struct ServerEditorView: View {
+/// Add/Edit server form. `server == nil` creates a new server; otherwise edits in place.
+struct ServerFormView: View {
     @Environment(ChatStore.self) private var model
     @Environment(\.dismiss) private var dismiss
+    let server: IRCServer?
+    init(server: IRCServer? = nil) { self.server = server }
     @State private var name: String = ""
     @State private var host: String = ""
     @State private var port: String = "6667"
@@ -1081,7 +1105,7 @@ struct ServerEditorView: View {
     private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil && nickIsValid }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Add Server").font(.headline)
+            Text(server == nil ? "Add Server" : "Edit Server").font(.headline)
             Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow { Text("Name:"); TextField("Display name", text: $name).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Server:"); TextField("irc.example.net", text: $host).textFieldStyle(.roundedBorder) }
@@ -1111,66 +1135,11 @@ struct ServerEditorView: View {
                     guard let p = validPort else { return }
                     let pwd: String? = password.isEmpty ? nil : password
                     let nick: String? = trimmedNick.isEmpty ? nil : trimmedNick
-                    model.addServer(name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
-            }
-        }
-        .padding(16)
-        .frame(width: 420)
-    }
-}
-
-struct EditServerView: View {
-    @Environment(ChatStore.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let server: IRCServer
-    @State private var name: String = ""
-    @State private var host: String = ""
-    @State private var port: String = "6667"
-    @State private var password: String = ""
-    @State private var useTLS: Bool = false
-    @State private var autoConnectOnLaunch: Bool = false
-    @State private var nickname: String = ""
-    private var validPort: Int? { Int(port).flatMap { (1...65535).contains($0) ? $0 : nil } }
-    private var trimmedNick: String { nickname.trimmingCharacters(in: .whitespaces) }
-    private var nickIsValid: Bool { trimmedNick.isEmpty || IRCNickName(trimmedNick) != nil }
-    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil && nickIsValid }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Edit Server").font(.headline)
-            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 8) {
-                GridRow { Text("Name:"); TextField("Display name", text: $name).textFieldStyle(.roundedBorder) }
-                GridRow { Text("Server:"); TextField("irc.example.net", text: $host).textFieldStyle(.roundedBorder) }
-                GridRow { Text("Port:"); TextField("6667", text: $port).textFieldStyle(.roundedBorder) }
-                GridRow { Text("Password:"); SecureField("Optional", text: $password).textFieldStyle(.roundedBorder) }
-                GridRow { Text("Nickname:"); TextField("Optional (uses default if blank)", text: $nickname).textFieldStyle(.roundedBorder) }
-                GridRow {
-                    Text("Use SSL/TLS:")
-                    Toggle("", isOn: $useTLS)
-                        .labelsHidden()
-                        .onChange(of: useTLS) { _, newValue in
-                            if let p = Int(port) {
-                                if newValue && (p == 6667) { port = "6697" }
-                                if !newValue && (p == 6697) { port = "6667" }
-                            }
-                        }
-                }
-                GridRow {
-                    Text("Auto-connect on launch:")
-                    Toggle("", isOn: $autoConnectOnLaunch).labelsHidden()
-                }
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
-                    guard let p = validPort else { return }
-                    let pwd: String? = password.isEmpty ? nil : password
-                    let nick: String? = trimmedNick.isEmpty ? nil : trimmedNick
-                    model.updateServer(id: server.id, name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                    if let server {
+                        model.updateServer(id: server.id, name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                    } else {
+                        model.addServer(name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                    }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -1178,6 +1147,7 @@ struct EditServerView: View {
             }
         }
         .onAppear {
+            guard let server else { return }
             name = server.name
             host = server.host
             port = String(server.port)

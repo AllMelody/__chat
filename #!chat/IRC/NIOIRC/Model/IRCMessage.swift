@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import struct Foundation.Data
 import Foundation
 
 /**
@@ -146,7 +145,8 @@ public struct IRCMessage : Codable, CustomStringConvertible {
     
     self.init(origin: try c.decodeIfPresent(String.self, forKey: .origin),
               target: try c.decodeIfPresent(String.self, forKey: .target),
-              command: command)
+              command: command,
+              tags: try c.decodeIfPresent([String: String].self, forKey: .tags))
   }
   @inlinable
   public func encode(to encoder: Encoder) throws {
@@ -155,5 +155,6 @@ public struct IRCMessage : Codable, CustomStringConvertible {
     try c.encodeIfPresent(target,         forKey: .target)
     try c.encode(command.commandAsString, forKey: .command)
     try c.encode(command.arguments,       forKey: .arguments)
+    try c.encodeIfPresent(tags,           forKey: .tags)
   }
 }

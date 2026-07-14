@@ -11,7 +11,7 @@ final class FormattingTests: XCTestCase {
         XCTAssertFalse(s.contains(","))
     }
 
-    func testEarlierThisYearUsesMonthDayTime() {
+    func testEarlierThisYearUsesMonthDayTime() throws {
         // "MMM d, HH:mm" — guarded so it only asserts when the sample date is genuinely
         // this year and not today (avoids year-rollover / same-day flakiness).
         let cal = Calendar.current
@@ -21,7 +21,9 @@ final class FormattingTests: XCTestCase {
         }
         guard cal.component(.year, from: candidate) == cal.component(.year, from: now),
               !cal.isDateInToday(candidate) else {
-            return // skip near Jan/Feb where 60 days ago is last year
+            // Near Jan/Feb, 60 days ago falls in the previous year; skip visibly
+            // instead of silently passing without asserting anything.
+            throw XCTSkip("60 days ago falls outside the current year")
         }
         let s = Formatting.timeString(candidate)
         XCTAssertTrue(s.contains(","))

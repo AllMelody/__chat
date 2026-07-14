@@ -25,7 +25,7 @@ final class ImageCacheService {
     // Link cache for content type detection
     struct LinkCacheEntry: Codable { let contentType: String; let lastChecked: Date }
     private let linkCacheKey = "LinkCache.v1"
-    private(set) var linkCache: [String: LinkCacheEntry] = [:] { didSet { persistLinkCache() } }
+    private var linkCache: [String: LinkCacheEntry] = [:] { didSet { persistLinkCache() } }
     
     init() {
         setupImageCache()

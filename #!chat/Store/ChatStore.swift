@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -8,6 +9,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     private let imageCache = ImageCacheService()
     private let messageRouter = MessageRouter()
     private let keychain = KeychainService()
+    private let notificationService = NotificationService()
 
     // Core data
     var servers: [IRCServer] = [] { didSet { persistServers() } }
@@ -52,6 +54,39 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         imageCache.onThumbnailUpdated = { [weak self] messageID, thumbnails in
             self?.messageThumbnails[messageID] = thumbnails
         }
+        notificationService.onSelectNode = { [weak self] nodeID in
+            guard let self else { return }
+            for server in self.servers {
+                if let channel = server.channels.first(where: { $0.id == nodeID }) {
+                    channel.unreadCount = 0
+                    self.selectedNodeID = nodeID
+                    return
+                }
+                if let pm = server.privateMessages.first(where: { $0.id == nodeID }) {
+                    pm.unreadCount = 0
+                    self.selectedNodeID = nodeID
+                    return
+                }
+            }
+        }
+    }
+
+    // MARK: - Highlight Notifications
+
+    /// Posts a macOS notification for a nick mention, unless the user is plainly already
+    /// looking at the conversation (app active + conversation selected) or the message is
+    /// old backlog replayed on reconnect (ZNC playback carries server-time) rather than
+    /// live traffic.
+    private func notifyHighlight(for message: ChatMessage, conversation: String, serverName: String, nodeID: UUID) {
+        guard Date().timeIntervalSince(message.time) < 60 else { return }
+        if NSApp.isActive && selectedNodeID == nodeID { return }
+        notificationService.postHighlight(
+            sender: message.senderNick ?? "Someone",
+            text: message.text,
+            conversation: conversation,
+            serverName: serverName,
+            nodeID: nodeID
+        )
     }
 
     /// Pushes preference values that backing services mirror (currently the raw-traffic debug
@@ -99,11 +134,6 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     func setTopic(_ topic: String, on channel: IRCChannel) {
         guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
         connectionService.sendTopicChange(topic, for: channel.name, on: server)
-    }
-
-    func requestTopic(for channel: IRCChannel) {
-        guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
-        connectionService.requestTopic(for: channel.name, on: server)
     }
 
     func closePrivateMessage(_ pm: IRCPrivateMessage, from server: IRCServer) {
@@ -217,7 +247,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     /// Cheap when nothing overflowed (one count check per node), so it runs on every log
     /// mutation via noteLogsChanged().
     func trimLogs() {
-        let cap = max(1, preferences?.maxLogLines ?? 1000)
+        let cap = max(1, preferences?.maxLogLines ?? AppPreferences.defaultMaxLogLines)
         let slack = max(32, cap / 10)
         // Assign back only when something was dropped, so @Observable setters (and the
         // SwiftUI invalidation they trigger) fire only on real changes.
@@ -335,7 +365,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
 
@@ -349,7 +379,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func ircConnectionService(_ service: IRCConnectionService, serverDidRegister serverID: UUID, as nick: String) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
         server.currentNick = nick
@@ -357,10 +387,8 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         let statusText = server.displayAttempt > 0 ?
             "Reconnected as \(nick)" :
             "Registered as \(nick)"
-        let message = ChatMessage(time: Date(), text: statusText)
-        server.log.append(message)
+        server.log.append(ChatMessage(time: Date(), text: statusText))
         noteLogsChanged()
-        scanMessageForThumbnails(message)
 
         connectionService.resetReconnectionAttempts(for: server)
         server.shouldAutoReconnect = true
@@ -373,14 +401,12 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
 
-        let message = ChatMessage(time: Date(), text: "Failed to register with server")
-        server.log.append(message)
+        server.log.append(ChatMessage(time: Date(), text: "Failed to register with server"))
         noteLogsChanged()
-        scanMessageForThumbnails(message)
 
         if server.shouldAutoReconnect {
             connectionService.scheduleReconnection(for: server)
@@ -388,7 +414,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func ircConnectionService(_ service: IRCConnectionService, server serverID: UUID, connectionStateChanged state: IRCClient.ConnectionState) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         // Map IRCClient.ConnectionState to IRCServer.ConnectionStatus
         switch state {
@@ -410,17 +436,15 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func ircConnectionService(_ service: IRCConnectionService, serverDidChangeNick serverID: UUID, to nick: String) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         server.currentNick = nick
-        let message = ChatMessage(time: Date(), text: "You are now known as \(nick)")
-        server.log.append(message)
+        server.log.append(ChatMessage(time: Date(), text: "You are now known as \(nick)"))
         noteLogsChanged()
-        scanMessageForThumbnails(message)
     }
     
     func ircConnectionService(_ service: IRCConnectionService, didReceiveMessage message: ChatMessage, for serverID: UUID, target: MessageTargetType) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         switch target {
         case .server:
@@ -439,6 +463,9 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             if !isDuplicate {
                 channel.log.append(message)
                 scanMessageForThumbnails(message)
+                if message.isHighlight {
+                    notifyHighlight(for: message, conversation: channel.name, serverName: server.name, nodeID: channel.id)
+                }
             }
 
             if !isMine, selectedNodeID != channel.id {
@@ -449,6 +476,9 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
             let pm = server.getOrCreatePrivateMessage(with: senderNick)
             pm.log.append(message)
             scanMessageForThumbnails(message)
+            if message.isHighlight {
+                notifyHighlight(for: message, conversation: "a private message", serverName: server.name, nodeID: pm.id)
+            }
 
             if selectedNodeID != pm.id {
                 pm.unreadCount += 1
@@ -458,7 +488,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         let channelObj = server.getOrCreateChannel(named: channel)
         channelObj.addUserIfNotPresent(nick)
@@ -473,19 +503,15 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, leftChannel channel: String, on serverID: UUID, isSelf: Bool) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         if isSelf {
             if let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) {
-                let message = ChatMessage(time: Date(), text: "Parted \(channel)")
-                channelObj.log.append(message)
-                channelObj.joined = false
                 // Channel is removed below; release the thumbnail state its log was holding.
                 discardThumbnails(for: channelObj.log)
             }
             server.channels.removeAll { $0.name.caseInsensitiveCompare(channel) == .orderedSame }
-            let message = ChatMessage(time: Date(), text: "Parted \(channel)")
-            server.log.append(message)
+            server.log.append(ChatMessage(time: Date(), text: "Parted \(channel)"))
             noteLogsChanged()
         } else if let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) {
             channelObj.removeUser(nick)
@@ -493,7 +519,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func ircConnectionService(_ service: IRCConnectionService, didReceiveUserList users: [String], for channel: String, on serverID: UUID) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
         guard let channelObj = server.channels.first(where: { $0.name.lowercased() == channel.lowercased() }) else { return }
 
         // Add each user if not already present (using case-insensitive check)
@@ -503,14 +529,14 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
     
     func ircConnectionService(_ service: IRCConnectionService, didReceiveWhoReply nick: String, for channel: String, on serverID: UUID) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
         guard let channelObj = server.channels.first(where: { $0.name.lowercased() == channel.lowercased() }) else { return }
 
         channelObj.addUserIfNotPresent(nick)
     }
 
     func ircConnectionService(_ service: IRCConnectionService, didReceiveTopicChange topic: String, for channel: String, on serverID: UUID, changedBy nick: String?) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
         guard let channelObj = server.channels.first(where: { $0.name.caseInsensitiveCompare(channel) == .orderedSame }) else { return }
 
         channelObj.topic = topic.isEmpty ? nil : topic
@@ -527,7 +553,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         let nickMessage = ChatMessage(time: Date(), text: "\(oldNick) is now known as \(newNick)")
 
@@ -550,7 +576,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?) {
-        guard let server = servers.first(where: { $0.id == serverID }) else { return }
+        guard let server = server(withID: serverID) else { return }
 
         let quitText = message.map { " (\($0))" } ?? ""
         let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")

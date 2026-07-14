@@ -107,8 +107,6 @@ public struct IRCMessageParser {
     let cSpace : UInt8 = 32
     let cColon : UInt8 = 58
     let cAt    : UInt8 = 64  // '@'
-    let _      : UInt8 = 59  // ';' (semicolon - unused)
-    // cEqual (61, '=') - parsed via String.split, not byte matching
     let c0     : UInt8 = 48 + 0
     let c9     : UInt8 = 48 + 9
     guard !line.isEmpty else { throw Error.syntaxError }

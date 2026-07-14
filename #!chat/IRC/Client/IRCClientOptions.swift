@@ -55,7 +55,6 @@ open class IRCClientOptions : ConnectOptions {
   open var password      : String?
   open var nickname      : IRCNickName
   open var userInfo      : IRCUserInfo
-  open var retryStrategy : IRCRetryStrategyCB?
   // Enable TLS/SSL when supported by the bootstrap/pipeline
   open var useTLS        : Bool = false
   
@@ -73,8 +72,7 @@ open class IRCClientOptions : ConnectOptions {
   {
     self.password      = password
     self.nickname      = nickname
-    self.retryStrategy = nil
-    
+
     self.userInfo = userInfo ?? IRCUserInfo(username: nickname.stringValue,
                                             hostname: host, servername: host,
                                             realname: "NIO IRC User")
@@ -86,7 +84,6 @@ open class IRCClientOptions : ConnectOptions {
     super.appendToDescription(&ms)
     ms += " \(nickname)"
     ms += " \(userInfo)"
-    if password      != nil { ms += " pwd"                  }
-    if retryStrategy != nil { ms += " has-retryStrategy-cb" }
+    if password != nil { ms += " pwd" }
   }
 }

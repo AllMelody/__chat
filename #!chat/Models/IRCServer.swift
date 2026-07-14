@@ -25,7 +25,7 @@ final class IRCServer: Identifiable, Hashable {
     // Connection status tracking - single source of truth
     var connectionStatus: ConnectionStatus = .disconnected
 
-    // Computed property for backwards compatibility - derives from connectionStatus
+    /// Convenience derived from connectionStatus.
     var isConnected: Bool {
         connectionStatus == .connected
     }

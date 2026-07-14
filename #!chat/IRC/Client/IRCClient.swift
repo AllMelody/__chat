@@ -95,17 +95,6 @@ open class IRCClient : IRCClientMessageTarget {
       }
     }
 
-    var userInfo : IRCUserInfo? {
-      @inline(__always) get {
-        switch self {
-          case .capNegotiating(_, _, let v): return v
-          case .registering(_, _, let v): return v
-          case .registered (_, _, let v): return v
-          default: return nil
-        }
-      }
-    }
-
     var channel : Channel? {
       @inline(__always) get {
         switch self {
@@ -146,9 +135,6 @@ open class IRCClient : IRCClientMessageTarget {
   
   // CAP negotiation state
   private var availableCapabilities: Set<String> = []
-  private var requestedCapabilities: Set<String> = []
-  private var acknowledgedCapabilities: Set<String> = []
-  private var capNegotiationInProgress = false
   private var capTimeoutTask: Scheduled<Void>?
   
   var usermask : String? {
@@ -257,21 +243,7 @@ open class IRCClient : IRCClientMessageTarget {
   
   // MARK: - Connect
   
-  var retryInfo = IRCRetryInfo()
   var channel : Channel? { @inline(__always) get { return state.channel } }
-
-  /// Returns true if the connection is active and can send/receive data
-  public var isActive: Bool {
-    guard let channel = self.channel else { return false }
-    return channel.isActive
-  }
-
-  /// Returns true if the client is fully registered and can send messages.
-  /// This is more reliable than `isActive` because it explicitly checks the registration state.
-  public var canSend: Bool {
-    guard case .registered(let channel, _, _) = state else { return false }
-    return channel.isActive
-  }
 
   /// The current connection state, derived from the internal state machine.
   /// This is the single source of truth for connection state.
@@ -308,13 +280,9 @@ open class IRCClient : IRCClientMessageTarget {
     clearListCollectors()
     userMode = IRCUserMode()
     state    = .connecting
-    
-    retryInfo.attempt += 1
-    
+
     return bootstrap.connect(host: host, port: port)
       .map { channel in
-        self.retryInfo.registerSuccessfulConnect()
-
         guard case .connecting = self.state else {
           print("WARNING: Expected connecting state in \(#function), but got: \(self.state)")
           return channel
@@ -338,10 +306,7 @@ open class IRCClient : IRCClientMessageTarget {
     }
 
     // Start IRCv3 capability negotiation
-    capNegotiationInProgress = true
     availableCapabilities.removeAll()
-    requestedCapabilities.removeAll()
-    acknowledgedCapabilities.removeAll()
 
     // Set timeout for CAP negotiation (5 seconds)
     capTimeoutTask = eventLoop.scheduleTask(in: .seconds(5)) {
@@ -396,9 +361,6 @@ open class IRCClient : IRCClientMessageTarget {
       }
 
       if !capsToRequest.isEmpty {
-        for cap in capsToRequest {
-          requestedCapabilities.insert(cap)
-        }
         send(.CAP(.REQ, capsToRequest))
       } else {
         // No capabilities we want, end negotiation
@@ -407,12 +369,7 @@ open class IRCClient : IRCClientMessageTarget {
       }
 
     case .ACK:
-      // Server acknowledges requested capabilities
-      for cap in capIDs {
-        acknowledgedCapabilities.insert(cap)
-      }
-
-      // End CAP negotiation
+      // Server acknowledged the requested capabilities; end negotiation
       send(.CAP(.END, []))
       proceedToRegistration()
 
@@ -443,29 +400,11 @@ open class IRCClient : IRCClientMessageTarget {
     capTimeoutTask?.cancel()
     capTimeoutTask = nil
 
-    capNegotiationInProgress = false
     // Move to registering state - NICK/USER were already sent during CAP negotiation
     // Server will now complete registration after receiving CAP END
     state = .registering(channel: channel, nick: nick, userInfo: user)
-    // Don't call _register() - we already sent NICK/USER in _startCapNegotiation()
   }
-  
-  private func _register() {
-    assert(eventLoop.inEventLoop, "threading issue")
 
-    guard case .registering(_, let nick, let user) = state else {
-      print("WARNING: Expected registering state in \(#function), but got: \(state)")
-      return
-    }
-
-    if let pwd = options.password {
-      send(.otherCommand("PASS", [ pwd ]))
-    }
-
-    send(.NICK(nick))
-    send(.USER(user))
-  }
-  
   /// Immediately closes the connection and transitions to disconnected state.
   /// This ensures clean shutdown on errors - no lingering half-open states.
   private func closeImmediately() {
@@ -556,7 +495,6 @@ open class IRCClient : IRCClientMessageTarget {
       if message.command.signalsSuccessfulRegistration {
         capTimeoutTask?.cancel()
         capTimeoutTask = nil
-        capNegotiationInProgress = false
         state = .registered(channel: channel, nick: nick, userInfo: user)
         delegate?.client(self, registered: nick, with: user)
         return
@@ -609,7 +547,6 @@ open class IRCClient : IRCClientMessageTarget {
   func handlerCaughtError(_ error: Swift.Error,
                           in context: ChannelHandlerContext) // Q: own
   {
-    retryInfo.lastSocketError = error
     print("IRCClient error:", error)
 
     // Determine if we were registered before the error
@@ -812,17 +749,7 @@ extension IRCClient : IRCDispatcher {
 
       /* unexpected stuff */
 
-      case .otherNumeric(let code, let args):
-        #if false
-          print("OTHER NUM:", code, args)
-        #endif
-        delegate?.client(self, received: message)
-
       default:
-        #if false
-          print("OTHER COMMAND:", message.command,
-                message.origin ?? "-", message.target ?? "-")
-        #endif
         delegate?.client(self, received: message)
     }
   }

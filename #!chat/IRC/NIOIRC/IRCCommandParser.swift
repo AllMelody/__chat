@@ -50,7 +50,7 @@ public extension IRCCommand {
     }
     
     func splitChannelsString(_ s: String) throws -> [ IRCChannelName ] {
-      return try arguments[0].split(separator: ",").map {
+      return try s.split(separator: ",").map {
         guard let n = IRCChannelName(String($0)) else {
           throw Error.invalidChannelName(String($0))
         }
@@ -58,7 +58,7 @@ public extension IRCCommand {
       }
     }
     func splitRecipientString(_ s: String) throws -> [ IRCMessageRecipient ] {
-      return try arguments[0].split(separator: ",").map {
+      return try s.split(separator: ",").map {
         guard let n = IRCMessageRecipient(String($0)) else {
           throw Error.invalidMessageTarget(String($0))
         }

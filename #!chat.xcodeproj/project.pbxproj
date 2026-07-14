@@ -12,6 +12,16 @@
 		CECA07D82E63821800308DC6 /* NIOSSL in Frameworks */ = {isa = PBXBuildFile; productRef = CECA07D72E63821800308DC6 /* NIOSSL */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		DD000000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CEA6229C2E458CD60008C2B0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CEA622A32E458CD60008C2B0;
+			remoteInfo = "#!chat";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		CEA622A42E458CD60008C2B0 /* #!chat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "#!chat.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD0000000000000000000006 /* #!chatTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "#!chatTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -197,16 +207,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXContainerItemProxy section */
-		DD000000000000000000000A /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = CEA6229C2E458CD60008C2B0 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = CEA622A32E458CD60008C2B0;
-			remoteInfo = "#!chat";
-		};
-/* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
 		DD000000000000000000000B /* PBXTargetDependency */ = {

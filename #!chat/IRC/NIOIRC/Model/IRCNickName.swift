@@ -15,7 +15,7 @@
 /**
  * An IRC nickname
  *
- * Channel names are case-insensitive!
+ * Nicknames are case-insensitive!
  *
  * Maximum length is 9 characters, but clients should support longer for
  * future compat.
