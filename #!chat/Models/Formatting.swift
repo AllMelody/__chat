@@ -1,41 +1,39 @@
 import Foundation
 
 enum Formatting {
-    static let timeOnlyFormatter: DateFormatter = {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "HH:mm"
-        return df
-    }()
+    // Fixed POSIX, 24-hour formats (not user-locale dependent). Format styles are
+    // Sendable value types, unlike DateFormatter.
+    private static let posix = Locale(identifier: "en_US_POSIX")
 
-    static let dateTimeFormatter: DateFormatter = {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "MMM d, HH:mm"
-        return df
-    }()
+    /// HH:mm
+    static let timeOnly = Date.VerbatimFormatStyle(
+        format: "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
+        locale: posix, timeZone: .autoupdatingCurrent, calendar: .autoupdatingCurrent)
 
-    static let yearDateTimeFormatter: DateFormatter = {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "MMM d yyyy, HH:mm"
-        return df
-    }()
+    /// MMM d, HH:mm
+    static let dateTime = Date.VerbatimFormatStyle(
+        format: "\(month: .abbreviated) \(day: .defaultDigits), \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
+        locale: posix, timeZone: .autoupdatingCurrent, calendar: .autoupdatingCurrent)
+
+    /// MMM d yyyy, HH:mm
+    static let yearDateTime = Date.VerbatimFormatStyle(
+        format: "\(month: .abbreviated) \(day: .defaultDigits) \(year: .defaultDigits), \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
+        locale: posix, timeZone: .autoupdatingCurrent, calendar: .autoupdatingCurrent)
 
     /// Formats a date for display in chat messages.
     /// - Today: shows just time (HH:mm)
     /// - This year: shows date and time (MMM d, HH:mm)
     /// - Previous years: shows full date with year (MMM d yyyy, HH:mm)
-    static func timeString(_ date: Date = Date()) -> String {
+    static func timeString(_ date: Date = .now) -> String {
         let calendar = Calendar.current
-        let now = Date()
+        let now = Date.now
 
         if calendar.isDateInToday(date) {
-            return timeOnlyFormatter.string(from: date)
+            return date.formatted(timeOnly)
         } else if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-            return dateTimeFormatter.string(from: date)
+            return date.formatted(dateTime)
         } else {
-            return yearDateTimeFormatter.string(from: date)
+            return date.formatted(yearDateTime)
         }
     }
 

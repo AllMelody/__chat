@@ -35,7 +35,16 @@ final class FormattingTests: XCTestCase {
         comps.year = 2000; comps.month = 3; comps.day = 5; comps.hour = 14; comps.minute = 30
         let d = Calendar.current.date(from: comps)!
         let s = Formatting.timeString(d)
-        XCTAssertTrue(s.contains("2000"))
-        XCTAssertTrue(s.contains(","))
+        XCTAssertEqual(s, "Mar 5 2000, 14:30")
+    }
+
+    func testExactFormats() {
+        // Pin the POSIX, 24-hour formats so a formatter refactor can't change output.
+        var comps = DateComponents()
+        comps.year = 2001; comps.month = 11; comps.day = 23; comps.hour = 9; comps.minute = 7
+        let d = Calendar.current.date(from: comps)!
+        XCTAssertEqual(d.formatted(Formatting.timeOnly), "09:07")
+        XCTAssertEqual(d.formatted(Formatting.dateTime), "Nov 23, 09:07")
+        XCTAssertEqual(d.formatted(Formatting.yearDateTime), "Nov 23 2001, 09:07")
     }
 }
