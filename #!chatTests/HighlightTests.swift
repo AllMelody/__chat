@@ -1,73 +1,48 @@
-import XCTest
+import Foundation
+import Testing
 @testable import __chat
 
-@MainActor
-final class HighlightTests: XCTestCase {
+struct HighlightTests {
     // MARK: - Positive matches
 
-    func testAddressedMention() {
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "AllMelody: did you see the log?"))
-    }
-
-    func testMidSentenceMention() {
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "I think AllMelody knows the answer"))
-    }
-
-    func testCaseInsensitiveMention() {
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "hey allmelody!"))
-        XCTAssertTrue(Formatting.mentionsNick("allmelody", in: "HEY ALLMELODY"))
-    }
-
-    func testMentionAtEndOfLine() {
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "ping AllMelody"))
-    }
-
-    func testMentionSurroundedByPunctuation() {
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "(AllMelody)"))
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "@AllMelody sure"))
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "AllMelody, ping"))
-    }
-
-    func testNickWithIRCSpecialCharacters() {
-        XCTAssertTrue(Formatting.mentionsNick("[Mel]", in: "yo [Mel] check this out"))
-        XCTAssertTrue(Formatting.mentionsNick("Mel|away", in: "Mel|away: welcome back"))
-    }
-
-    func testLaterOccurrenceStillMatches() {
+    @Test(arguments: [
+        ("AllMelody", "AllMelody: did you see the log?"),   // addressed
+        ("AllMelody", "I think AllMelody knows the answer"), // mid-sentence
+        ("AllMelody", "hey allmelody!"),                    // case-insensitive
+        ("allmelody", "HEY ALLMELODY"),
+        ("AllMelody", "ping AllMelody"),                    // end of line
+        ("AllMelody", "(AllMelody)"),                       // surrounded by punctuation
+        ("AllMelody", "@AllMelody sure"),
+        ("AllMelody", "AllMelody, ping"),
+        ("[Mel]", "yo [Mel] check this out"),               // IRC special characters
+        ("Mel|away", "Mel|away: welcome back"),
         // First candidate ("AllMelodyFan") fails the boundary check; the scan must keep
         // going and find the real standalone mention afterwards.
-        XCTAssertTrue(Formatting.mentionsNick("AllMelody", in: "AllMelodyFan and AllMelody are different"))
+        ("AllMelody", "AllMelodyFan and AllMelody are different"),
+    ])
+    func mentions(nick: String, text: String) {
+        #expect(Formatting.mentionsNick(nick, in: text))
     }
 
     // MARK: - Negative matches
 
-    func testSubstringOfLongerWordDoesNotMatch() {
-        XCTAssertFalse(Formatting.mentionsNick("AllMelody", in: "AllMelodyFan joined the channel"))
-    }
-
-    func testNickCharSuffixIsDifferentNick() {
-        // AllMelody_ is somebody else (underscore is a valid nick character).
-        XCTAssertFalse(Formatting.mentionsNick("AllMelody", in: "AllMelody_: hello"))
-    }
-
-    func testNickCharPrefixIsDifferentNick() {
-        XCTAssertFalse(Formatting.mentionsNick("AllMelody", in: "_AllMelody says hi"))
-        XCTAssertFalse(Formatting.mentionsNick("Mel", in: "[Mel] is not Mel"))
-    }
-
-    func testNoMentionAtAll() {
-        XCTAssertFalse(Formatting.mentionsNick("AllMelody", in: "nothing to see here"))
-    }
-
-    func testEmptyInputs() {
-        XCTAssertFalse(Formatting.mentionsNick("", in: "anything"))
-        XCTAssertFalse(Formatting.mentionsNick("AllMelody", in: ""))
+    @Test(arguments: [
+        ("AllMelody", "AllMelodyFan joined the channel"), // substring of a longer word
+        ("AllMelody", "AllMelody_: hello"),               // '_' suffix: somebody else
+        ("AllMelody", "_AllMelody says hi"),              // nick-char prefix
+        ("Mel", "[Mel] is not Mel"),
+        ("AllMelody", "nothing to see here"),
+        ("", "anything"),                                 // empty inputs
+        ("AllMelody", ""),
+    ])
+    func doesNotMention(nick: String, text: String) {
+        #expect(!Formatting.mentionsNick(nick, in: text))
     }
 
     // MARK: - ChatMessage flag
 
-    func testChatMessageDefaultsToNotHighlighted() {
+    @Test func `Chat message defaults to not highlighted`() {
         let msg = ChatMessage(time: Date(), text: "hi", senderNick: "someone", isPrivmsg: true)
-        XCTAssertFalse(msg.isHighlight)
+        #expect(!msg.isHighlight)
     }
 }

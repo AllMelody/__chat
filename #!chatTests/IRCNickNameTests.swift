@@ -1,39 +1,44 @@
-import XCTest
+import Testing
 @testable import __chat
 
-@MainActor
-final class IRCNickNameTests: XCTestCase {
-    func testValidNicks() {
-        XCTAssertNotNil(IRCNickName("alice"))
-        XCTAssertNotNil(IRCNickName("Bob123"))
-        XCTAssertNotNil(IRCNickName("ni_ck"))      // '_' is an allowed special char
-        XCTAssertNotNil(IRCNickName("nick-name"))  // '-' allowed as an inner char
-        XCTAssertNotNil(IRCNickName("[nick]"))     // '[' and ']' are allowed special chars
-        XCTAssertNotNil(IRCNickName("7guest"))     // leading digit allowed by default flags
+struct IRCNickNameTests {
+    @Test(arguments: [
+        "alice",
+        "Bob123",
+        "ni_ck",     // '_' is an allowed special char
+        "nick-name", // '-' allowed as an inner char
+        "[nick]",    // '[' and ']' are allowed special chars
+        "7guest",    // leading digit allowed by default flags
+    ])
+    func validNick(_ name: String) {
+        #expect(IRCNickName(name) != nil)
     }
 
-    func testInvalidNicks() {
-        XCTAssertNil(IRCNickName(""))           // empty
-        XCTAssertNil(IRCNickName("a"))          // too short (needs count > 1)
-        XCTAssertNil(IRCNickName("has space"))  // space not allowed
-        XCTAssertNil(IRCNickName("nick!"))      // '!' not allowed
-        XCTAssertNil(IRCNickName("a@b"))        // '@' not allowed
+    @Test(arguments: [
+        "",          // empty
+        "a",         // too short (needs count > 1)
+        "has space", // space not allowed
+        "nick!",     // '!' not allowed
+        "a@b",       // '@' not allowed
+    ])
+    func invalidNick(_ name: String) {
+        #expect(IRCNickName(name) == nil)
     }
 
-    func testStrictLengthLimit() {
+    @Test func `Strict length limit`() {
         let long = String(repeating: "a", count: 10) // 10 > strict max of 9
-        XCTAssertNil(IRCNickName(long, validationFlags: [.strictLengthLimit]))
-        XCTAssertNotNil(IRCNickName(long))            // default allows up to 1024
+        #expect(IRCNickName(long, validationFlags: [.strictLengthLimit]) == nil)
+        #expect(IRCNickName(long) != nil)            // default allows up to 1024
     }
 
-    func testLeadingDigitRejectedWhenDisallowed() {
+    @Test func `Leading digit rejected when disallowed`() {
         // Without .allowStartingDigit, a leading digit is invalid (and length must still be > 1).
-        XCTAssertNil(IRCNickName("7guest", validationFlags: [.strictLengthLimit]))
-        XCTAssertNotNil(IRCNickName("guest7", validationFlags: [.strictLengthLimit]))
+        #expect(IRCNickName("7guest", validationFlags: [.strictLengthLimit]) == nil)
+        #expect(IRCNickName("guest7", validationFlags: [.strictLengthLimit]) != nil)
     }
 
-    func testCaseInsensitiveEquality() {
-        XCTAssertEqual(IRCNickName("Alice"), IRCNickName("alice"))
-        XCTAssertNotEqual(IRCNickName("alice"), IRCNickName("bob"))
+    @Test func `Case-insensitive equality`() {
+        #expect(IRCNickName("Alice") == IRCNickName("alice"))
+        #expect(IRCNickName("alice") != IRCNickName("bob"))
     }
 }
