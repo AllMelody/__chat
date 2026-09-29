@@ -23,16 +23,16 @@ nonisolated public extension IRCCommand {
    * The parser validates the argument counts etc and throws exceptions on
    * unexpected input.
    */
-  init(_ command: String, arguments: [ String ]) throws {
+  init(_ command: String, arguments: [ String ]) throws(IRCParserError) {
     typealias Error = IRCParserError
     
-    func expect(argc: Int) throws {
+    func expect(argc: Int) throws(IRCParserError) {
       guard argc == arguments.count else {
         throw Error.invalidArgumentCount(command: command,
                                          count: arguments.count, expected: argc)
       }
     }
-    func expect(min: Int? = nil, max: Int? = nil) throws {
+    func expect(min: Int? = nil, max: Int? = nil) throws(IRCParserError) {
       if let max = max {
         guard arguments.count <= max else {
           throw Error.invalidArgumentCount(command: command,
@@ -49,18 +49,18 @@ nonisolated public extension IRCCommand {
       }
     }
     
-    func splitChannelsString(_ s: String) throws -> [ IRCChannelName ] {
-      return try s.split(separator: ",").map {
-        guard let n = IRCChannelName(String($0)) else {
-          throw Error.invalidChannelName(String($0))
+    func splitChannelsString(_ s: String) throws(IRCParserError) -> [ IRCChannelName ] {
+      return try s.split(separator: ",").map { (part) throws(IRCParserError) -> IRCChannelName in
+        guard let n = IRCChannelName(String(part)) else {
+          throw Error.invalidChannelName(String(part))
         }
         return n
       }
     }
-    func splitRecipientString(_ s: String) throws -> [ IRCMessageRecipient ] {
-      return try s.split(separator: ",").map {
-        guard let n = IRCMessageRecipient(String($0)) else {
-          throw Error.invalidMessageTarget(String($0))
+    func splitRecipientString(_ s: String) throws(IRCParserError) -> [ IRCMessageRecipient ] {
+      return try s.split(separator: ",").map { (part) throws(IRCParserError) -> IRCMessageRecipient in
+        guard let n = IRCMessageRecipient(String(part)) else {
+          throw Error.invalidMessageTarget(String(part))
         }
         return n
       }
@@ -199,9 +199,9 @@ nonisolated public extension IRCCommand {
         try expect(min: 1)
         var nicks = [ IRCNickName ]()
         for arg in arguments {
-          nicks += try arg.split(separator: " ").map(String.init).map {
-            guard let nick = IRCNickName($0) else {
-              throw Error.invalidNickName($0)
+          nicks += try arg.split(separator: " ").map(String.init).map { (name) throws(IRCParserError) -> IRCNickName in
+            guard let nick = IRCNickName(name) else {
+              throw Error.invalidNickName(name)
             }
             return nick
           }
@@ -279,7 +279,7 @@ nonisolated public extension IRCCommand {
    * unexpected input.
    */
   @inlinable
-  init(_ v: Int, arguments: [ String ]) throws {
+  init(_ v: Int, arguments: [ String ]) throws(IRCParserError) {
     if let code = IRCCommandCode(rawValue: v) {
       self = .numeric(code, arguments)
     }
@@ -296,7 +296,7 @@ nonisolated public extension IRCCommand {
    * unexpected input.
    */
   @inlinable
-  init(_ s: String, _ arguments: String...) throws {
+  init(_ s: String, _ arguments: String...) throws(IRCParserError) {
     try self.init(s, arguments: arguments)
   }
   
@@ -308,7 +308,7 @@ nonisolated public extension IRCCommand {
    * unexpected input.
    */
   @inlinable
-  init(_ v: Int, _ arguments: String...) throws {
+  init(_ v: Int, _ arguments: String...) throws(IRCParserError) {
     try self.init(v, arguments: arguments)
   }
 }

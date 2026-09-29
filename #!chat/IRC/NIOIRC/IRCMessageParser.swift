@@ -79,12 +79,12 @@ nonisolated public struct IRCMessageParser {
           continue
         }
         
-        do {
+        do throws(Error) {
           let message = try processLine(cursor[cursor.startIndex..<idx])
           yield( ( nil, message ) )
         }
         catch {
-          yield( ( error as? IRCParserError ?? .syntaxError, nil ) )
+          yield( ( error, nil ) )
         }
         
         cursor = nextCursor
@@ -98,7 +98,7 @@ nonisolated public struct IRCMessageParser {
   }
     
   @usableFromInline
-  func processLine(_ line: Swift.Slice<UnsafeRawBufferPointer>) throws
+  func processLine(_ line: Swift.Slice<UnsafeRawBufferPointer>) throws(Error)
        -> IRCMessage
   {
     // IRCv3 syntax with tags:
