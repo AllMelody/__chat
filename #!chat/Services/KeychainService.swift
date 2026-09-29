@@ -12,7 +12,7 @@ struct KeychainService {
     private static let service = "io.github.AllMelody.chat.serverPassword"
 
     /// Upsert: update existing item, or add if absent.
-    func save(password: String, for id: UUID) throws {
+    func save(password: String, for id: UUID) throws(KeychainError) {
         let account = id.uuidString
         let data = Data(password.utf8)
 
@@ -42,7 +42,7 @@ struct KeychainService {
     }
 
     /// Returns the stored password, or nil if none exists.
-    func password(for id: UUID) throws -> String? {
+    func password(for id: UUID) throws(KeychainError) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -61,7 +61,7 @@ struct KeychainService {
     }
 
     /// Deletes the stored password; a missing item is treated as success.
-    func delete(for id: UUID) throws {
+    func delete(for id: UUID) throws(KeychainError) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,

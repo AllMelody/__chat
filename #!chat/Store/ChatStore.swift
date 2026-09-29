@@ -334,7 +334,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     /// Writes the password to the Keychain, or deletes the entry if password is nil/empty.
-    private func syncKeychain(password: String?, for id: UUID) throws {
+    private func syncKeychain(password: String?, for id: UUID) throws(KeychainError) {
         if let password, !password.isEmpty {
             try keychain.save(password: password, for: id)
         } else {
