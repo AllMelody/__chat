@@ -194,6 +194,34 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         return servers.first(where: { $0.id == id })
     }
 
+    /// Every sidebar row in display order: each server followed by its channels and PMs.
+    var sidebarItems: [SidebarItem] {
+        servers.flatMap { s in
+            [SidebarItem(kind: .server(s))] +
+            s.channels.map { SidebarItem(kind: .channel($0)) } +
+            s.privateMessages.map { SidebarItem(kind: .privateMessage($0)) }
+        }
+    }
+
+    /// Moves the sidebar selection by `offset` (wrapping). Entering a conversation this
+    /// way counts as reading it, so its unread badge clears.
+    func navigateSidebar(by offset: Int) {
+        let all = sidebarItems
+        guard !all.isEmpty else { return }
+        guard let currentID = selectedNodeID,
+              let currentIndex = all.firstIndex(where: { $0.id == currentID }) else {
+            selectedNodeID = all.first?.id
+            return
+        }
+        let item = all[(currentIndex + offset + all.count) % all.count]
+        selectedNodeID = item.id
+        if case .channel(let channel) = item.kind {
+            channel.unreadCount = 0
+        } else if case .privateMessage(let pm) = item.kind {
+            pm.unreadCount = 0
+        }
+    }
+
     /// Returns the server for a given selection (server ID, channel ID, or PM ID)
     func serverForSelection(_ selectionID: UUID?) -> IRCServer? {
         guard let id = selectionID else { return nil }

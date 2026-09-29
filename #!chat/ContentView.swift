@@ -9,49 +9,24 @@ struct ContentView: View {
     @Environment(\.controlActiveState) private var activeState
 
     @State private var draft = ""
+    /// Bumped to ask the composer to take keyboard focus.
+    @State private var composerFocusRequest = 0
 
     private let rowHeight: CGFloat = 24
     private let iconColWidth: CGFloat = 18
     private let indentWidth: CGFloat = 14
     private var onePixel: CGFloat { 1 / (NSScreen.main?.backingScaleFactor ?? 2) }
 
-    private var allNodesFlat: [SidebarItem] {
-        model.servers.flatMap { s in 
-            [SidebarItem(kind: .server(s))] + 
-            s.channels.map { SidebarItem(kind: .channel($0)) } +
-            s.privateMessages.map { SidebarItem(kind: .privateMessage($0)) }
-        }
-    }
-
     private func validateSelection() {
-        let all = allNodesFlat
+        let all = model.sidebarItems
         let selectionIsValid = model.selectedNodeID.map { id in all.contains { $0.id == id } } ?? false
         if !selectionIsValid {
             model.selectedNodeID = model.servers.first?.id ?? all.first?.id
         }
     }
 
-    /// Moves the sidebar selection by `offset` (wrapping). Entering a conversation this
-    /// way counts as reading it, so its unread badge clears.
-    private func navigate(by offset: Int) {
-        let all = allNodesFlat
-        guard !all.isEmpty else { return }
-        guard let currentID = model.selectedNodeID,
-              let currentIndex = all.firstIndex(where: { $0.id == currentID }) else {
-            model.selectedNodeID = all.first?.id
-            return
-        }
-        let item = all[(currentIndex + offset + all.count) % all.count]
-        model.selectedNodeID = item.id
-        if case .channel(let channel) = item.kind {
-            channel.unreadCount = 0
-        } else if case .privateMessage(let pm) = item.kind {
-            pm.unreadCount = 0
-        }
-    }
-
     private func focusComposer() {
-        NotificationCenter.default.post(name: .composerFocus, object: nil)
+        composerFocusRequest += 1
     }
 
     var body: some View {
@@ -65,12 +40,6 @@ struct ContentView: View {
         let viewWithStateChanges = viewWithAppearance
             .onChange(of: activeState) { _, new in if new == .key { focusComposer() } }
             .onChange(of: model.selectedNodeID) { _, _ in focusComposer() }
-            .onReceive(NotificationCenter.default.publisher(for: .navigateUp)) { _ in
-                navigate(by: -1)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .navigateDown)) { _ in
-                navigate(by: 1)
-            }
 
         let addServerBinding = Binding(get: { model.isPresentingAddServer }, set: { model.isPresentingAddServer = $0 })
         let joinChannelBinding = Binding(get: { model.isPresentingJoinChannel }, set: { model.isPresentingJoinChannel = $0 })
@@ -119,14 +88,13 @@ struct ContentView: View {
                 .padding(.bottom, 2)
 
             Divider()
-            ComposerTextField(text: $draft, placeholder: "Type a message…")
-                .padding(.leading, 6)
-                .padding(.trailing, 4)
-                .padding(.bottom, 2)
-                .frame(height: 26)
-                .onReceive(NotificationCenter.default.publisher(for: .composerSubmit)) { _ in
-                    if canSendMessage { sendMessage() }
-                }
+            ComposerTextField(text: $draft, placeholder: "Type a message…", focusRequest: composerFocusRequest) {
+                if canSendMessage { sendMessage() }
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 4)
+            .padding(.bottom, 2)
+            .frame(height: 26)
         }
     }
 
@@ -267,6 +235,9 @@ struct ContentView: View {
 private struct ComposerTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
+    /// Each change moves keyboard focus into the field.
+    let focusRequest: Int
+    let onSubmit: () -> Void
 
     /// The display string shown in the text field: newlines replaced with a literal ` \n `
     /// so the field stays one line. The binding `text` keeps the real newlines for sending.
@@ -302,15 +273,14 @@ private struct ComposerTextField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerTextField
-        var focusObserver: Any?
+        var lastFocusRequest: Int
         weak var textField: NSTextField?
         /// Guard against re-entrant updates while we're adjusting the field value.
         var isSyncing = false
 
-        init(_ parent: ComposerTextField) { self.parent = parent }
-
-        deinit {
-            if let obs = focusObserver { NotificationCenter.default.removeObserver(obs) }
+        init(_ parent: ComposerTextField) {
+            self.parent = parent
+            self.lastFocusRequest = parent.focusRequest
         }
 
         func controlTextDidChange(_ obj: Notification) {
@@ -340,7 +310,7 @@ private struct ComposerTextField: NSViewRepresentable {
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                NotificationCenter.default.post(name: .composerSubmit, object: nil)
+                parent.onSubmit()
                 return true
             }
             return false
@@ -377,18 +347,17 @@ private struct ComposerTextField: NSViewRepresentable {
         tf.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         context.coordinator.textField = tf
-        context.coordinator.focusObserver = NotificationCenter.default.addObserver(
-            forName: .composerFocus, object: nil, queue: .main
-        ) { [weak tf] _ in
-            guard let tf else { return }
-            tf.window?.makeFirstResponder(tf)
-        }
 
         DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
         return tf
     }
 
     func updateNSView(_ tf: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if context.coordinator.lastFocusRequest != focusRequest {
+            context.coordinator.lastFocusRequest = focusRequest
+            tf.window?.makeFirstResponder(tf)
+        }
         guard !context.coordinator.isSyncing else { return }
         let flat = Self.flatten(text)
         if tf.stringValue != flat {

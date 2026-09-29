@@ -1,11 +1,5 @@
 import SwiftUI
 
-extension Notification.Name {
-    static let navigateUp = Notification.Name("navigateUp")
-    static let navigateDown = Notification.Name("navigateDown")
-    static let composerSubmit = Notification.Name("composerSubmit")
-    static let composerFocus = Notification.Name("composerFocus")
-}
 
 @main
 struct ChatApp: App {
@@ -50,17 +44,11 @@ struct ChatApp: App {
                 }
 
                 CommandMenu("Navigation") {
-                    Button("Previous Item") { 
-                        // Send notification that ContentView will observe
-                        NotificationCenter.default.post(name: .navigateUp, object: nil)
-                    }
-                    .keyboardShortcut(.upArrow, modifiers: [.command])
-                    
-                    Button("Next Item") { 
-                        // Send notification that ContentView will observe
-                        NotificationCenter.default.post(name: .navigateDown, object: nil)
-                    }
-                    .keyboardShortcut(.downArrow, modifiers: [.command])
+                    Button("Previous Item") { model.navigateSidebar(by: -1) }
+                        .keyboardShortcut(.upArrow, modifiers: [.command])
+
+                    Button("Next Item") { model.navigateSidebar(by: 1) }
+                        .keyboardShortcut(.downArrow, modifiers: [.command])
                 }
             }
         Settings {
