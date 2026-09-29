@@ -844,8 +844,10 @@ struct SidebarRowBase<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         let isKey = (activeState == .key)
-        let bgColor: Color = { guard isSelected else { return .clear }; return isKey ? Color(nsColor: .selectedContentBackgroundColor) : Color(nsColor: .unemphasizedSelectedContentBackgroundColor) }()
-        let fgColor: Color = { guard isSelected else { return .primary }; return isKey ? .white : .primary }()
+        let bgColor: Color = if !isSelected { .clear }
+            else if isKey { Color(nsColor: .selectedContentBackgroundColor) }
+            else { Color(nsColor: .unemphasizedSelectedContentBackgroundColor) }
+        let fgColor: Color = isSelected && isKey ? .white : .primary
         ZStack {
             bgColor
             HStack(spacing: 6) {
@@ -876,10 +878,10 @@ struct ServerRow: View {
     
     private var statusColor: Color {
         switch server.connectionStatus {
-        case .connected: return .green
-        case .connecting, .reconnecting: return .orange
-        case .connectionTimeout, .reconnectionFailed: return .red
-        case .disconnected: return .secondary
+        case .connected: .green
+        case .connecting, .reconnecting: .orange
+        case .connectionTimeout, .reconnectionFailed: .red
+        case .disconnected: .secondary
         }
     }
     
@@ -955,29 +957,29 @@ struct SidebarItem: Identifiable, Hashable {
 
     var id: UUID {
         switch kind { 
-        case .server(let s): return s.id
-        case .channel(let c): return c.id
-        case .privateMessage(let pm): return pm.id
+        case .server(let s): s.id
+        case .channel(let c): c.id
+        case .privateMessage(let pm): pm.id
         }
     }
     var name: String {
         switch kind { 
-        case .server(let s): return s.name
-        case .channel(let c): return c.name
-        case .privateMessage(let pm): return pm.nickname
+        case .server(let s): s.name
+        case .channel(let c): c.name
+        case .privateMessage(let pm): pm.nickname
         }
     }
     var systemImageName: String {
         switch kind {
-        case .channel: return "rectangle.3.group.bubble"
-        case .privateMessage: return "person.2"
-        case .server(let s): 
+        case .channel: "rectangle.3.group.bubble"
+        case .privateMessage: "person.2"
+        case .server(let s):
             switch s.connectionStatus {
-            case .connected: return "network"
-            case .connecting: return "network.badge.shield.half.filled"
-            case .reconnecting: return "arrow.clockwise.circle"
-            case .connectionTimeout, .reconnectionFailed: return "network.slash"
-            case .disconnected: return "network.slash"
+            case .connected: "network"
+            case .connecting: "network.badge.shield.half.filled"
+            case .reconnecting: "arrow.clockwise.circle"
+            case .connectionTimeout, .reconnectionFailed: "network.slash"
+            case .disconnected: "network.slash"
             }
         }
     }
