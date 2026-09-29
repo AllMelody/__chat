@@ -9,7 +9,6 @@ struct ChatApp: App {
     init() {
         self.model = ChatStore()
         model.preferences = preferences
-        model.syncPreferencesToServices()
     }
 
     private var isChannelSelected: Bool {

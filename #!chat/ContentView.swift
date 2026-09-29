@@ -1035,7 +1035,7 @@ struct PreferencesView: View {
                 }
                 GridRow {
                     Text("Log raw server traffic (debug):")
-                    Toggle("", isOn: Binding(get: { prefs.debugRawServerLog }, set: { prefs.debugRawServerLog = $0; model.syncPreferencesToServices() }))
+                    Toggle("", isOn: Binding(get: { prefs.debugRawServerLog }, set: { prefs.debugRawServerLog = $0 }))
                         .labelsHidden()
                 }
             }

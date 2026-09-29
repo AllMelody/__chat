@@ -34,7 +34,8 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     var isPresentingTopicEditor: Bool = false
     
     // Preferences
-    weak var preferences: AppPreferences?
+    weak var preferences: AppPreferences? { didSet { mirrorPreferencesToServices() } }
+    @ObservationIgnored private var preferencesMirrorTask: Task<Void, Never>?
     
     init() {
         setupServices()
@@ -91,10 +92,19 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         )
     }
 
-    /// Pushes preference values that backing services mirror (currently the raw-traffic debug
-    /// log). Call after `preferences` is set and whenever the relevant preference changes.
-    func syncPreferencesToServices() {
-        connectionService.debugRawServerLog = preferences?.debugRawServerLog ?? false
+    /// Keeps preference values that backing services mirror (currently the raw-traffic debug
+    /// log) in sync. Observations emits the current value first, then every change.
+    private func mirrorPreferencesToServices() {
+        preferencesMirrorTask?.cancel()
+        guard let preferences else { return }
+        let debugRawServerLog = Observations { [weak preferences] in
+            preferences?.debugRawServerLog ?? false
+        }
+        preferencesMirrorTask = Task { [weak self] in
+            for await value in debugRawServerLog {
+                self?.connectionService.debugRawServerLog = value
+            }
+        }
     }
     
     // MARK: - Thumbnails
