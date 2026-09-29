@@ -4,7 +4,7 @@ import NIO
 import Network
 import Synchronization
 
-/// Threading contract: all mutable state on this type (clients, connectionTimers, pingTasks,
+/// Threading contract: all mutable state on this type (clients, connectionTimeouts, pingTasks,
 /// lastPongReceived, selfNicks, registeredServerIDs, messageQueue, queueTimer) and all IRCServer
 /// model mutation MUST happen on the main thread. IRCClientDelegate callbacks arrive on the NIO
 /// event loop (they're `nonisolated`) and forward a ClientEvent through an AsyncStream that is
@@ -14,7 +14,7 @@ import Synchronization
 final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate {
     // Clients and connection state
     var clients: [UUID: IRCClient] = [:]
-    var connectionTimers: [UUID: Timer] = [:]
+    var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
     var pingTasks: [UUID: RepeatedTask] = [:]
     var lastPongReceived: [UUID: Date] = [:]
     private var selfNicks: [UUID: String] = [:]
@@ -76,9 +76,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         pathMonitor.cancel()
         if let obs = sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
         if let obs = wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
-        // Clean up all timers
-        for timer in connectionTimers.values {
-            timer.invalidate()
+        // Cancel all connect timeouts
+        for task in connectionTimeouts.values {
+            task.cancel()
         }
         // Cancel all ping tasks
         for task in pingTasks.values {
@@ -122,8 +122,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         pingTasks[serverID]?.cancel()
         pingTasks.removeValue(forKey: serverID)
         lastPongReceived.removeValue(forKey: serverID)
-        connectionTimers[serverID]?.invalidate()
-        connectionTimers.removeValue(forKey: serverID)
+        connectionTimeouts.removeValue(forKey: serverID)?.cancel()
 
         if let server = serverLookup?(serverID) {
             if server.connectionStatus == .connected || server.connectionStatus == .connecting {
@@ -260,18 +259,17 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     private func setupConnectionTimeout(for server: IRCServer) {
         cancelConnectionTimeout(for: server)
         
-        let timer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.handleConnectionTimeout(for: server)
-            }
+        // Task.sleep only throws on cancellation, which simply ends the task.
+        connectionTimeouts[server.id] = Task { [weak self] in
+            try await Task.sleep(for: .seconds(30))
+            try Task.checkCancellation()
+            self?.connectionTimeouts[server.id] = nil
+            self?.handleConnectionTimeout(for: server)
         }
-        RunLoop.main.add(timer, forMode: .common)
-        connectionTimers[server.id] = timer
     }
     
     func cancelConnectionTimeout(for server: IRCServer) {
-        connectionTimers[server.id]?.invalidate()
-        connectionTimers.removeValue(forKey: server.id)
+        connectionTimeouts.removeValue(forKey: server.id)?.cancel()
     }
     
     private func handleConnectionTimeout(for server: IRCServer) {
@@ -746,8 +744,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             pingTasks[serverID]?.cancel()
             pingTasks.removeValue(forKey: serverID)
             lastPongReceived.removeValue(forKey: serverID)
-            connectionTimers[serverID]?.invalidate()
-            connectionTimers.removeValue(forKey: serverID)
+            connectionTimeouts.removeValue(forKey: serverID)?.cancel()
             reconnectionManager.cancelReconnection(for: serverID)
 
             // Remove client reference
