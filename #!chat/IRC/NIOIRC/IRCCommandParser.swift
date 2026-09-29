@@ -287,28 +287,4 @@ nonisolated public extension IRCCommand {
       self = .otherNumeric(v, arguments)
     }
   }
-
-  /**
-   * This initializer creates `IRCCommand` values from String command names and
-   * string arguments (as parsed by the `IRCMessageParser`).
-   *
-   * The parser validates the argument counts etc and throws exceptions on
-   * unexpected input.
-   */
-  @inlinable
-  init(_ s: String, _ arguments: String...) throws(IRCParserError) {
-    try self.init(s, arguments: arguments)
-  }
-  
-  /**
-   * This initializer creates `IRCCommand` values from numeric commands and
-   * string arguments (as parsed by the `IRCMessageParser`).
-   *
-   * The parser validates the argument counts etc and throws exceptions on
-   * unexpected input.
-   */
-  @inlinable
-  init(_ v: Int, _ arguments: String...) throws(IRCParserError) {
-    try self.init(v, arguments: arguments)
-  }
 }

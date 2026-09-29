@@ -115,13 +115,12 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(6)
                     }
-                    ForEach(model.servers, id: \.id) { server in
+                    ForEach(model.servers) { server in
                         ServerRow(
                             server: server,
                             isSelected: model.selectedNodeID == server.id,
                             rowHeight: rowHeight,
                             iconColWidth: iconColWidth,
-                            indentWidth: indentWidth,
                             activeState: activeState,
                             select: { model.selectedNodeID = server.id },
                             connect: {
@@ -134,7 +133,6 @@ struct ContentView: View {
                             },
                             joinChannelPrompt: {
                                 model.pendingJoinServerID = server.id
-                                model.joinChannelDraft = ""
                                 model.isPresentingJoinChannel = true
                             },
                             editServer: {
@@ -144,9 +142,10 @@ struct ContentView: View {
                             deleteServer: { model.deleteServer(server) }
                         )
                         separator()
-                        ForEach(server.channels, id: \.id) { ch in
+                        ForEach(server.channels) { ch in
+                            let node = SidebarItem(kind: .channel(ch))
                             ConversationRow(
-                                node: SidebarItem(kind: .channel(ch)),
+                                node: node,
                                 unreadCount: ch.unreadCount,
                                 isSelected: model.selectedNodeID == ch.id,
                                 rowHeight: rowHeight,
@@ -154,10 +153,7 @@ struct ContentView: View {
                                 indentWidth: indentWidth,
                                 activeState: activeState,
                                 menuTitle: "Part Channel",
-                                select: {
-                                    ch.unreadCount = 0
-                                    model.selectedNodeID = ch.id
-                                },
+                                select: { model.select(node) },
                                 menuAction: {
                                     let wasSelected = (model.selectedNodeID == ch.id)
                                     model.partChannel(ch)
@@ -166,9 +162,10 @@ struct ContentView: View {
                             )
                             if ch.id != server.channels.last?.id || !server.privateMessages.isEmpty { separator() }
                         }
-                        ForEach(server.privateMessages, id: \.id) { pm in
+                        ForEach(server.privateMessages) { pm in
+                            let node = SidebarItem(kind: .privateMessage(pm))
                             ConversationRow(
-                                node: SidebarItem(kind: .privateMessage(pm)),
+                                node: node,
                                 unreadCount: pm.unreadCount,
                                 isSelected: model.selectedNodeID == pm.id,
                                 rowHeight: rowHeight,
@@ -176,10 +173,7 @@ struct ContentView: View {
                                 indentWidth: indentWidth,
                                 activeState: activeState,
                                 menuTitle: "Close Conversation",
-                                select: {
-                                    pm.unreadCount = 0
-                                    model.selectedNodeID = pm.id
-                                },
+                                select: { model.select(node) },
                                 menuAction: {
                                     let wasSelected = (model.selectedNodeID == pm.id)
                                     model.closePrivateMessage(pm, from: server)
@@ -197,34 +191,37 @@ struct ContentView: View {
         }, autosaveName: "RightPaneSplitHeight", isVertical: false)
     }
 
-    @ViewBuilder
     private func separator() -> some View { Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: onePixel) }
 
     // MARK: - Data accessors
-    private var selectedServer: IRCServer? { model.servers.first(where: { $0.id == model.selectedNodeID }) }
+    private var selectedServer: IRCServer? { model.server(withID: model.selectedNodeID) }
     private var canSendMessage: Bool {
         // Use the ChatStore method that checks actual client availability
         model.canSendMessage(to: model.selectedNodeID)
     }
-    private func findChannel(id: UUID?) -> IRCChannel? { guard let id else { return nil }; for s in model.servers { if let c = s.channels.first(where: { $0.id == id }) { return c } }; return nil }
-    private func findPrivateMessage(id: UUID?) -> IRCPrivateMessage? { guard let id else { return nil }; for s in model.servers { if let pm = s.privateMessages.first(where: { $0.id == id }) { return pm } }; return nil }
-    private var currentMessages: [ChatMessage] {
-        let all: [ChatMessage]
-        if let ch = findChannel(id: model.selectedNodeID) { all = ch.log }
-        else if let pm = findPrivateMessage(id: model.selectedNodeID) { all = pm.log }
-        else if let s = selectedServer { all = s.log }
-        else { all = [] }
-        let keep = max(1, prefs.maxLogLines)
-        return all.count > keep ? Array(all.suffix(keep)) : all
+    private func findChannel(id: UUID?) -> IRCChannel? {
+        guard let id else { return nil }
+        return model.servers.lazy.flatMap(\.channels).first { $0.id == id }
     }
-    private var currentUsers: [String] { guard let users = findChannel(id: model.selectedNodeID)?.users else { return [] }; return users.sorted { $0.localizedStandardCompare($1) == .orderedAscending } }
+    private func findPrivateMessage(id: UUID?) -> IRCPrivateMessage? {
+        guard let id else { return nil }
+        return model.servers.lazy.flatMap(\.privateMessages).first { $0.id == id }
+    }
+    private var currentMessages: [ChatMessage] {
+        let all = findChannel(id: model.selectedNodeID)?.log
+            ?? findPrivateMessage(id: model.selectedNodeID)?.log
+            ?? selectedServer?.log
+            ?? []
+        return Array(all.suffix(max(1, prefs.maxLogLines)))
+    }
+    private var currentUsers: [String] {
+        (findChannel(id: model.selectedNodeID)?.users ?? []).sorted(using: .localizedStandard)
+    }
     private func sendMessage() {
         model.handleInputFromComposer(draft, selection: model.selectedNodeID)
         draft = ""
     }
 }
-
-// MARK: - Log View (NSTextView wrapper)
 
 // MARK: - Composer (NSTextField wrapper to avoid placeholder shift on focus change)
 
@@ -265,7 +262,6 @@ private struct ComposerTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerTextField
         var lastFocusRequest: Int
-        weak var textField: NSTextField?
         /// Guard against re-entrant updates while we're adjusting the field value.
         var isSyncing = false
 
@@ -337,8 +333,6 @@ private struct ComposerTextField: NSViewRepresentable {
         tf.translatesAutoresizingMaskIntoConstraints = false
         tf.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        context.coordinator.textField = tf
-
         DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
         return tf
     }
@@ -362,6 +356,8 @@ extension NSAttributedString.Key {
     /// LogLayoutManager across the full line width instead of just behind the glyphs.
     static let ircHighlightLine = NSAttributedString.Key("ircHighlightLine")
 }
+
+// MARK: - Log View (NSTextView wrapper)
 
 /// TextKit 1 layout manager for the chat log. For ranges tagged .ircHighlightLine it fills
 /// each line fragment edge to edge with the marker's color, underneath normal background
@@ -555,9 +551,10 @@ private struct LogTextView: NSViewRepresentable {
         return paragraph
     }()
     
-    private static let sharedLinkDetector: NSDataDetector? = {
-        try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    }()
+    // Link-only data detectors can't fail to initialize.
+    private static let sharedLinkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    private static let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
 
     /// Background for lines that mention our nick. systemYellow adapts to light/dark; the
     /// alpha keeps label-colored text readable on top of it.
@@ -569,11 +566,37 @@ private struct LogTextView: NSViewRepresentable {
     /// fragment. Raising the baseline by half the surplus centers it. Applied to every text
     /// run (not just highlighted ones) so all lines share the same baseline.
     private static let textBaselineOffset: CGFloat = {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let natural = NSLayoutManager().defaultLineHeight(for: font)
+        let natural = NSLayoutManager().defaultLineHeight(for: baseFont)
         return max(0, (sharedParagraphStyle.minimumLineHeight - natural) / 2)
     }()
-    
+
+    /// Log text attributes (shared font, paragraph style and baseline) in the given color.
+    private static func textAttributes(_ color: NSColor) -> [NSAttributedString.Key: Any] {
+        [
+            .font: baseFont,
+            .paragraphStyle: sharedParagraphStyle,
+            .foregroundColor: color,
+            .baselineOffset: textBaselineOffset
+        ]
+    }
+
+    /// Plain text and inter-message separators.
+    private static let baseAttributes = textAttributes(.labelColor)
+    private static let grayAttributes = textAttributes(.secondaryLabelColor)
+    private static let myNickAttributes = textAttributes(NSColor(calibratedHue: 0.0, saturation: 0.75, brightness: 0.55, alpha: 1.0))
+    private static let otherNickAttributes = textAttributes(NSColor(calibratedHue: 0.13, saturation: 0.75, brightness: 0.55, alpha: 1.0))
+
+    /// `text` in `attributes`, with detected URLs made clickable.
+    private static func linkified(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSMutableAttributedString {
+        let result = NSMutableAttributedString(string: text, attributes: attributes)
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        sharedLinkDetector.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
+            guard let match, let url = match.url else { return }
+            result.addAttribute(.link, value: url, range: match.range)
+        }
+        return result
+    }
+
     private func apply(messages: [ChatMessage], to textView: NSTextView, coordinator: Coordinator, forceFullRebuild: Bool) {
         guard let storage = textView.textStorage else { return }
         let newIDs = messages.map { $0.id }
@@ -595,7 +618,7 @@ private struct LogTextView: NSViewRepresentable {
             // separator if there is already content.
             var needsSeparator = !prior.isEmpty && storage.length > 0
             for msg in messages.suffix(newIDs.count - prior.count) {
-                if needsSeparator { appended.append(NSAttributedString(string: "\n", attributes: baseAttributes())) }
+                if needsSeparator { appended.append(NSAttributedString(string: "\n", attributes: Self.baseAttributes)) }
                 needsSeparator = true
                 appended.append(attributedString(for: msg))
             }
@@ -605,7 +628,7 @@ private struct LogTextView: NSViewRepresentable {
             for (idx, msg) in messages.enumerated() {
                 combined.append(attributedString(for: msg))
                 if idx < messages.count - 1 {
-                    combined.append(NSAttributedString(string: "\n", attributes: baseAttributes()))
+                    combined.append(NSAttributedString(string: "\n", attributes: Self.baseAttributes))
                 }
             }
             storage.setAttributedString(combined)
@@ -617,16 +640,6 @@ private struct LogTextView: NSViewRepresentable {
             newIDs.map { ($0, thumbnailFingerprint(for: $0)) },
             uniquingKeysWith: { first, _ in first }
         )
-    }
-
-    /// Base attributes for plain text and inter-message separators (label color, shared paragraph style).
-    private func baseAttributes() -> [NSAttributedString.Key: Any] {
-        [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-            .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor.labelColor,
-            .baselineOffset: Self.textBaselineOffset
-        ]
     }
 
     /// Stable fingerprint of a message's thumbnails (count + how many images have loaded).
@@ -645,64 +658,20 @@ private struct LogTextView: NSViewRepresentable {
     /// a trailing inter-message newline. Shared by the full-rebuild and append paths so the two
     /// produce byte-identical output for the same message.
     private func attributedString(for msg: ChatMessage) -> NSAttributedString {
-        let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let attrs = baseAttributes()
-        let grayAttrs: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .baselineOffset: Self.textBaselineOffset
-        ]
-        let myNickAttrs: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor(calibratedHue: 0.0, saturation: 0.75, brightness: 0.55, alpha: 1.0),
-            .baselineOffset: Self.textBaselineOffset
-        ]
-        let otherNickAttrs: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .paragraphStyle: Self.sharedParagraphStyle,
-            .foregroundColor: NSColor(calibratedHue: 0.13, saturation: 0.75, brightness: 0.55, alpha: 1.0),
-            .baselineOffset: Self.textBaselineOffset
-        ]
-        let detector = Self.sharedLinkDetector
-
+        let attrs = Self.baseAttributes
         let combined = NSMutableAttributedString()
         // Time, without brackets, gray
         let timeStr = "\(Formatting.timeString(msg.time)) "
-        combined.append(NSAttributedString(string: timeStr, attributes: grayAttrs))
+        combined.append(NSAttributedString(string: timeStr, attributes: Self.grayAttributes))
 
         if msg.isPrivmsg, let nick = msg.senderNick {
             // Chat line: colored nick, gray colon, body in label color
             let isMine = msg.isFromMe || myNick.map { nick.caseInsensitiveCompare($0) == .orderedSame } ?? false
-            combined.append(NSAttributedString(string: nick, attributes: isMine ? myNickAttrs : otherNickAttrs))
-            combined.append(NSAttributedString(string: ": ", attributes: grayAttrs))
-
-            let bodyStr = msg.text
-            let bodyAttr = NSMutableAttributedString(string: bodyStr, attributes: attrs)
-            if let detector {
-                let nsBody = bodyStr as NSString
-                let bodyRange = NSRange(location: 0, length: nsBody.length)
-                detector.enumerateMatches(in: bodyStr, options: [], range: bodyRange) { result, _, _ in
-                    guard let result, let url = result.url else { return }
-                    bodyAttr.addAttribute(.link, value: url, range: result.range)
-                }
-            }
-            combined.append(bodyAttr)
-        } else {
-            // Non-chat line: keep as-is (label color), but still detect links
-            let text = msg.text
-            let plain = NSMutableAttributedString(string: text, attributes: attrs)
-            if let detector {
-                let nsText = text as NSString
-                let fullRange = NSRange(location: 0, length: nsText.length)
-                detector.enumerateMatches(in: text, options: [], range: fullRange) { result, _, _ in
-                    guard let result, let url = result.url else { return }
-                    plain.addAttribute(.link, value: url, range: result.range)
-                }
-            }
-            combined.append(plain)
+            combined.append(NSAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes))
+            combined.append(NSAttributedString(string: ": ", attributes: Self.grayAttributes))
         }
+        // Chat body or non-chat line: label color, with links detected
+        combined.append(Self.linkified(msg.text, attributes: attrs))
 
         // Marker consumed by LogLayoutManager, which paints the wash edge to edge across
         // the text view (.backgroundColor would only paint behind the glyphs). Applied
@@ -867,7 +836,6 @@ struct ServerRow: View {
     let isSelected: Bool
     let rowHeight: CGFloat
     let iconColWidth: CGFloat
-    let indentWidth: CGFloat
     let activeState: ControlActiveState
     let select: () -> Void
     let connect: () -> Void
@@ -875,7 +843,11 @@ struct ServerRow: View {
     let joinChannelPrompt: () -> Void
     let editServer: () -> Void
     let deleteServer: () -> Void
-    
+
+    private var isConnecting: Bool {
+        server.connectionStatus == .connecting || server.connectionStatus == .reconnecting
+    }
+
     private var statusColor: Color {
         switch server.connectionStatus {
         case .connected: .green
@@ -894,7 +866,7 @@ struct ServerRow: View {
             Text(node.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
             
             // Status indicator for connecting/reconnecting states
-            if server.connectionStatus == .connecting || server.connectionStatus == .reconnecting {
+            if isConnecting {
                 Image(systemName: "ellipsis")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -902,18 +874,18 @@ struct ServerRow: View {
             }
         }
         .contextMenu {
-            if server.isConnected { 
+            if server.isConnected {
                 Button("Disconnect…", action: disconnect)
                 Button("Join Channel…", action: joinChannelPrompt)
-            } else if server.connectionStatus == .connecting || server.connectionStatus == .reconnecting {
+            } else if isConnecting {
                 Button("Cancel Connection", action: disconnect)
-            } else { 
+            } else {
                 Button("Connect…", action: connect)
             }
             Divider()
             Button("Edit Server…", action: editServer)
             Divider()
-            Button(role: .destructive) { deleteServer() } label: { Text("Delete Server…") }
+            Button("Delete Server…", role: .destructive, action: deleteServer)
         }
         .onTapGesture(perform: select)
     }
@@ -951,7 +923,7 @@ struct ConversationRow: View {
     }
 }
 
-struct SidebarItem: Identifiable, Hashable {
+struct SidebarItem: Identifiable {
     enum Kind { case server(IRCServer), channel(IRCChannel), privateMessage(IRCPrivateMessage) }
     let kind: Kind
 
@@ -978,14 +950,10 @@ struct SidebarItem: Identifiable, Hashable {
             case .connected: "network"
             case .connecting: "network.badge.shield.half.filled"
             case .reconnecting: "arrow.clockwise.circle"
-            case .connectionTimeout, .reconnectionFailed: "network.slash"
-            case .disconnected: "network.slash"
+            case .connectionTimeout, .reconnectionFailed, .disconnected: "network.slash"
             }
         }
     }
-
-    static func == (lhs: SidebarItem, rhs: SidebarItem) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 // MARK: - Dialogs & Preferences
@@ -1119,7 +1087,6 @@ struct JoinChannelView: View {
                 Text("Channel:")
                 TextField("#channel", text: $name)
                     .textFieldStyle(.roundedBorder)
-                    .onAppear { name = model.joinChannelDraft }
             }
             HStack {
                 Spacer()
@@ -1180,10 +1147,13 @@ struct AutosavingSplitView<Left: View, Right: View>: NSViewRepresentable {
         self.isVertical = isVertical
     }
     func makeNSView(context: Context) -> NSSplitView {
-        let split = NSSplitView(); split.isVertical = isVertical; split.dividerStyle = .thin
+        let split = NSSplitView()
+        split.isVertical = isVertical
+        split.dividerStyle = .thin
         let leftHost = NSHostingView(rootView: left)
         let rightHost = NSHostingView(rootView: right)
-        split.addArrangedSubview(leftHost); split.addArrangedSubview(rightHost)
+        split.addArrangedSubview(leftHost)
+        split.addArrangedSubview(rightHost)
         split.autosaveName = NSSplitView.AutosaveName(autosaveName)
         leftHost.setContentHuggingPriority(.defaultLow, for: .horizontal)
         rightHost.setContentHuggingPriority(.defaultLow, for: .horizontal)

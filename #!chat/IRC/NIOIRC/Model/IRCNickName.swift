@@ -21,9 +21,7 @@
  * future compat.
  */
 nonisolated public struct IRCNickName : Hashable, CustomStringConvertible, Sendable {
-  
-  public typealias StringLiteralType = String
-  
+
   @usableFromInline let storage    : String
   @usableFromInline let normalized : String
   

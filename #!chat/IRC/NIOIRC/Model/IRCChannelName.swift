@@ -26,9 +26,7 @@
  * - shall not contain a ','
  */
 nonisolated public struct IRCChannelName : Hashable, CustomStringConvertible, Sendable {
-  
-  public typealias StringLiteralType = String
-  
+
   @usableFromInline let storage    : String
   @usableFromInline let normalized : String
 

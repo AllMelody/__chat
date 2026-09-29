@@ -40,9 +40,6 @@ nonisolated public struct IRCUserMode : OptionSet, Sendable {
   public static let hideHostname          = IRCUserMode(rawValue: 1 << 13)
 
   @inlinable
-  public var maskValue : UInt16 { return rawValue }
-  
-  @inlinable
   public init?(_ string: String) {
     var mask : UInt16 = 0
     for c in string {

@@ -32,9 +32,7 @@ struct KeychainService {
             throw KeychainError.unexpectedStatus(updateStatus)
         }
 
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let addQuery = query.merging(attributes) { _, new in new }
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         if addStatus != errSecSuccess {
             throw KeychainError.unexpectedStatus(addStatus)

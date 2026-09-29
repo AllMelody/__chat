@@ -2,13 +2,10 @@ import Foundation
 import Observation
 
 @Observable
-final class IRCChannel: Identifiable, Hashable {
-    static func == (lhs: IRCChannel, rhs: IRCChannel) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-
+final class IRCChannel: Identifiable {
     let id = UUID()
     var name: String
-    var topic: String? = nil
+    var topic: String?
     var users: [String] = []
     var log: [ChatMessage] = []
     var unreadCount: Int = 0
@@ -44,10 +41,7 @@ final class IRCChannel: Identifiable, Hashable {
 }
 
 @Observable
-final class IRCPrivateMessage: Identifiable, Hashable {
-    static func == (lhs: IRCPrivateMessage, rhs: IRCPrivateMessage) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-
+final class IRCPrivateMessage: Identifiable {
     let id = UUID()
     var nickname: String
     var log: [ChatMessage] = []

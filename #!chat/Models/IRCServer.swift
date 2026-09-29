@@ -2,10 +2,7 @@ import Foundation
 import Observation
 
 @Observable
-final class IRCServer: Identifiable, Hashable {
-    static func == (lhs: IRCServer, rhs: IRCServer) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-
+final class IRCServer: Identifiable {
     let id: UUID
     var name: String
     var host: String
@@ -17,10 +14,10 @@ final class IRCServer: Identifiable, Hashable {
     var log: [ChatMessage] = []
     var autoConnectOnLaunch: Bool = false
     // Last known nickname for this server (set on register or nick change)
-    var currentNick: String? = nil
+    var currentNick: String?
 
     // Per-server preferred nickname (nil/empty = use the app-wide default). Set by the user.
-    var nickname: String? = nil
+    var nickname: String?
 
     // Connection status tracking - single source of truth
     var connectionStatus: ConnectionStatus = .disconnected
@@ -58,11 +55,19 @@ final class IRCServer: Identifiable, Hashable {
 
     // MARK: - Channel/PM Helpers
 
+    /// Existing channel with this name (case-insensitive match)
+    func channel(named name: String) -> IRCChannel? {
+        channels.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// Existing PM conversation with this nick (case-insensitive match)
+    func privateMessage(with nickname: String) -> IRCPrivateMessage? {
+        privateMessages.first { $0.nickname.caseInsensitiveCompare(nickname) == .orderedSame }
+    }
+
     /// Gets existing channel or creates a new one (case-insensitive match)
     func getOrCreateChannel(named name: String) -> IRCChannel {
-        if let existing = channels.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-            return existing
-        }
+        if let existing = channel(named: name) { return existing }
         let channel = IRCChannel(name: name)
         channels.append(channel)
         return channel
@@ -70,9 +75,7 @@ final class IRCServer: Identifiable, Hashable {
 
     /// Gets existing PM or creates a new one (case-insensitive match)
     func getOrCreatePrivateMessage(with nickname: String) -> IRCPrivateMessage {
-        if let existing = privateMessages.first(where: { $0.nickname.caseInsensitiveCompare(nickname) == .orderedSame }) {
-            return existing
-        }
+        if let existing = privateMessage(with: nickname) { return existing }
         let pm = IRCPrivateMessage(nickname: nickname)
         privateMessages.append(pm)
         return pm
@@ -112,10 +115,6 @@ struct IRCServerRecord: Codable {
         self.useTLS = useTLS
         self.autoConnectOnLaunch = autoConnectOnLaunch
         self.nickname = nickname
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, host, port, password, useTLS, autoConnectOnLaunch, nickname
     }
 
     // Custom encode: deliberately OMIT password so it never returns to plaintext storage.

@@ -26,7 +26,10 @@ final class ImageCacheService {
     private let linkCacheKey = "LinkCache.v1"
     private var linkCache: [String: LinkCacheEntry] = [:] { didSet { persistLinkCache() } }
     private var linkCacheSaveTask: Task<Void, any Error>?
-    
+
+    // Link-only data detectors can't fail to initialize.
+    private let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     init() {
         setupImageCache()
         loadLinkCacheAndPrune()
@@ -49,8 +52,8 @@ final class ImageCacheService {
     }
 
     private func pruneOldCacheFiles() {
-        // Run on background queue to avoid blocking startup
-        DispatchQueue.global(qos: .utility).async { [imageCacheDirectory, cacheMaxAge] in
+        // Run in the background to avoid blocking startup
+        Task.detached(priority: .utility) { [imageCacheDirectory, cacheMaxAge] in
             let fileManager = FileManager.default
             let cutoffDate = Date().addingTimeInterval(-cacheMaxAge)
 
@@ -138,48 +141,50 @@ final class ImageCacheService {
         }
     }
 
+    /// Sets the loaded image for `url` in a message's thumbnail list (appending the entry if
+    /// it's new) and publishes the updated list.
+    private func setThumbnailImage(_ image: NSImage, url: String, messageID: UUID) {
+        var list = messageThumbnails[messageID] ?? []
+        if let idx = list.firstIndex(where: { $0.url == url }) {
+            list[idx].image = image
+        } else {
+            list.append(MessageThumbnail(url: url, image: image))
+        }
+        messageThumbnails[messageID] = list
+        onThumbnailUpdated?(messageID, list)
+    }
+
+    /// Reserves a not-yet-loaded thumbnail slot for `url`; publishes only if one was added.
+    private func addThumbnailPlaceholder(url: String, messageID: UUID) {
+        var list = messageThumbnails[messageID] ?? []
+        guard !list.contains(where: { $0.url == url }) else { return }
+        list.append(MessageThumbnail(url: url, image: nil))
+        messageThumbnails[messageID] = list
+        onThumbnailUpdated?(messageID, list)
+    }
+
     func scanMessageForThumbnails(_ message: ChatMessage, showImageThumbnails: Bool) {
         guard showImageThumbnails else { return }
-        guard let detector = linkDetector else { return }
         let text = message.text
-        let nsText = text as NSString
-        let range = NSRange(location: 0, length: nsText.length)
+        let range = NSRange(location: 0, length: (text as NSString).length)
         var seen = Set<String>()
-        detector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
+        linkDetector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
             guard let u = result?.url, ["http", "https"].contains(u.scheme?.lowercased() ?? "") else { return }
             let key = u.absoluteString
-            if seen.insert(key).inserted {
-                // YouTube: we know the thumbnail URL without a HEAD request
-                if let ytThumbURL = ImageCacheService.youTubeThumbnailURL(for: u) {
-                    if let cachedImage = self.cachedImage(for: key) {
-                        var list = self.messageThumbnails[message.id] ?? []
-                        if let idx = list.firstIndex(where: { $0.url == key }) {
-                            list[idx].image = cachedImage
-                        } else {
-                            list.append(MessageThumbnail(url: key, image: cachedImage))
-                        }
-                        self.messageThumbnails[message.id] = list
-                        self.onThumbnailUpdated?(message.id, list)
-                    } else {
-                        var list = self.messageThumbnails[message.id] ?? []
-                        if !list.contains(where: { $0.url == key }) {
-                            list.append(MessageThumbnail(url: key, image: nil))
-                            self.messageThumbnails[message.id] = list
-                            self.onThumbnailUpdated?(message.id, list)
-                        }
-                        self.fetchImage(urlString: ytThumbURL, messageID: message.id, displayURL: key)
-                    }
-                } else if let cached = self.linkCache[key], cached.contentType.lowercased().hasPrefix("image/") {
-                    var list = self.messageThumbnails[message.id] ?? []
-                    if !list.contains(where: { $0.url == key }) {
-                        list.append(MessageThumbnail(url: key, image: nil))
-                        self.messageThumbnails[message.id] = list
-                        self.onThumbnailUpdated?(message.id, list)
-                    }
-                    self.fetchThumbnailIfNeeded(for: key, messageID: message.id)
+            guard seen.insert(key).inserted else { return }
+            // YouTube: we know the thumbnail URL without a HEAD request
+            if let ytThumbURL = Self.youTubeThumbnailURL(for: u) {
+                if let cachedImage = self.cachedImage(for: key) {
+                    self.setThumbnailImage(cachedImage, url: key, messageID: message.id)
                 } else {
-                    self.fetchThumbnailIfNeeded(for: key, messageID: message.id)
+                    self.addThumbnailPlaceholder(url: key, messageID: message.id)
+                    self.fetchImage(urlString: ytThumbURL, messageID: message.id, displayURL: key)
                 }
+            } else {
+                if let cached = self.linkCache[key], cached.contentType.lowercased().hasPrefix("image/") {
+                    self.addThumbnailPlaceholder(url: key, messageID: message.id)
+                }
+                self.fetchThumbnailIfNeeded(for: key, messageID: message.id)
             }
         }
     }
@@ -207,15 +212,9 @@ final class ImageCacheService {
     private func fetchThumbnailIfNeeded(for urlString: String, messageID: UUID) {
         // First check if we have a cached image
         if let cachedImage = cachedImage(for: urlString) {
-            DispatchQueue.main.async {
-                var list = self.messageThumbnails[messageID] ?? []
-                if let idx = list.firstIndex(where: { $0.url == urlString }) {
-                    list[idx].image = cachedImage
-                } else {
-                    list.append(MessageThumbnail(url: urlString, image: cachedImage))
-                }
-                self.messageThumbnails[messageID] = list
-                self.onThumbnailUpdated?(messageID, list)
+            // Published asynchronously, like the network-fetched paths.
+            Task {
+                self.setThumbnailImage(cachedImage, url: urlString, messageID: messageID)
             }
             return
         }
@@ -243,12 +242,7 @@ final class ImageCacheService {
             let ct = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
             self.linkCache[urlString] = LinkCacheEntry(contentType: ct, lastChecked: Date())
             if ct.lowercased().hasPrefix("image/") {
-                var list = self.messageThumbnails[messageID] ?? []
-                if !list.contains(where: { $0.url == urlString }) {
-                    list.append(MessageThumbnail(url: urlString, image: nil))
-                    self.messageThumbnails[messageID] = list
-                    self.onThumbnailUpdated?(messageID, list)
-                }
+                self.addThumbnailPlaceholder(url: urlString, messageID: messageID)
                 self.fetchImage(urlString: urlString, messageID: messageID)
             }
         }
@@ -282,15 +276,7 @@ final class ImageCacheService {
 
             let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
             self.imageCache.setObject(img, forKey: memoryKey as NSString)
-
-            var arr = self.messageThumbnails[messageID] ?? []
-            if let idx = arr.firstIndex(where: { $0.url == cacheKey }) {
-                arr[idx].image = img
-            } else {
-                arr.append(MessageThumbnail(url: cacheKey, image: img))
-            }
-            self.messageThumbnails[messageID] = arr
-            self.onThumbnailUpdated?(messageID, arr)
+            self.setThumbnailImage(img, url: cacheKey, messageID: messageID)
         }
     }
 
@@ -316,9 +302,4 @@ final class ImageCacheService {
         }
         return cg
     }
-    
-    // Cache the regex detector for performance
-    private let linkDetector: NSDataDetector? = {
-        try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    }()
 }

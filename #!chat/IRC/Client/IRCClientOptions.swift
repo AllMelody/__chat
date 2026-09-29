@@ -57,12 +57,7 @@ nonisolated open class IRCClientOptions : ConnectOptions {
   open var userInfo      : IRCUserInfo
   // Enable TLS/SSL when supported by the bootstrap/pipeline
   open var useTLS        : Bool = false
-  
-  public convenience init?(nick: String) {
-    guard let nickname = IRCNickName(nick) else { return nil }
-    self.init(nickname: nickname)
-  }
-  
+
   public init(port           : Int             = DefaultIRCPort,
               host           : String          = "localhost",
               password       : String?         = nil,

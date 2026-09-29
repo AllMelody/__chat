@@ -46,17 +46,8 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
 
   @inlinable
   public init() {}
-  
-  @inlinable
-  open func channelActive(context: ChannelHandlerContext) {
-    context.fireChannelActive()
-  }
-  @inlinable
-  open func channelInactive(context: ChannelHandlerContext) {
-    context.fireChannelInactive()
-  }
 
-  
+
   // MARK: - Reading
   
   @usableFromInline
@@ -184,7 +175,7 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
         buffer.writeString(userInfo.username)
         if let mask = userInfo.usermask {
           buffer.writeInteger(cSpace)
-          buffer.write(integerAsString: Int(mask.maskValue))
+          buffer.writeString(String(mask.rawValue))
           buffer.writeInteger(cSpace)
           buffer.writeInteger(cStar)
         }

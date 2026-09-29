@@ -14,16 +14,7 @@
 
 import Foundation
 import NIO
-#if canImport(NIOSSL)
 import NIOSSL
-#endif
-#if canImport(Network)
-import Network
-#endif
-
-    #if canImport(NIOTransportServices)
-      import NIOTransportServices
-    #endif
 
 /**
  * A simple IRC client based on SwiftNIO.
@@ -41,7 +32,7 @@ import Network
  * before connecting. That confinement isn't expressible to the compiler,
  * hence `@unchecked`.
  */
-nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
+nonisolated open class IRCClient : @unchecked Sendable {
   
   public let options   : IRCClientOptions
   public let eventLoop : EventLoop
@@ -51,12 +42,8 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
   public var serverID  : UUID?
   
   public enum Error : Swift.Error {
-    case writeError(Swift.Error)
     case stopped
-    case notImplemented
     case internalInconsistency
-    case unexpectedInput
-    case channelError(Swift.Error)
   }
 
   /// Simplified public connection state for external observers.
@@ -141,47 +128,17 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
   // CAP negotiation state
   private var availableCapabilities: Set<String> = []
   private var capTimeoutTask: Scheduled<Void>?
-  
-  var usermask : String? {
-    guard case .registered(_, let nick, let info) = state else { return nil }
-    let host = info.servername ?? options.hostname ?? "??"
-    return "\(nick.stringValue)!~\(info.username)@\(host)"
-  }
 
-  private let bootstrap : NIOClientTCPBootstrapProtocol
-  
+  private let bootstrap : ClientBootstrap
+
   public init(options: IRCClientOptions) {
     self.options = options
-    
+
     let eventLoop = options.eventLoopGroup.next()
     self.eventLoop = eventLoop
-  
-    // what a mess :-)
-    #if canImport(NIOTransportServices)
-      #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-        var overrideBootstrap : NIOClientTCPBootstrapProtocol?
-        if #available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *) {
-          if options.eventLoopGroup is NIOTSEventLoopGroup {
-            var tsBootstrap = NIOTSConnectionBootstrap(group: eventLoop)
-            if options.useTLS {
-              let tls = NWProtocolTLS.Options()
-              // Set SNI if available
-              if let host = options.hostname {
-                sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, host)
-              }
-              tsBootstrap = tsBootstrap.tlsOptions(tls)
-            }
-            overrideBootstrap = tsBootstrap
-          }
-        }
-      #else
-        let overrideBootstrap : NIOClientTCPBootstrapProtocol? = nil
-      #endif
-    #else
-      let overrideBootstrap : NIOClientTCPBootstrapProtocol? = nil
-    #endif
-    
-    self.bootstrap = overrideBootstrap ?? ClientBootstrap(group: eventLoop)
+    // Always a MultiThreadedEventLoopGroup (see ConnectOptions), so a plain
+    // ClientBootstrap with NIOSSL for TLS.
+    self.bootstrap = ClientBootstrap(group: eventLoop)
 
     _ = bootstrap.channelOption(ChannelOptions.reuseAddr, value: 1)
     
@@ -191,7 +148,6 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
       channel.eventLoop.makeCompletedFuture {
         guard let me = self else { throw Error.internalInconsistency }
         let sync = channel.pipeline.syncOperations
-        #if canImport(NIOSSL)
         if me.options.useTLS {
           var config = TLSConfiguration.makeClientConfiguration()
           config.applicationProtocols = [ "irc", "ircv3", "h2", "http/1.1" ]
@@ -200,7 +156,6 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
                                                   serverHostname: me.options.hostname),
                               position: .first)
         }
-        #endif
         try sync.addHandler(ByteToMessageHandler(IRCLineDecoder(),
                                                  maximumBufferSize: IRCLineDecoder.maximumLineLength))
         try sync.addHandler(IRCChannelHandler(), name: "de.zeezide.nio.irc.protocol")
@@ -518,18 +473,7 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
       }
     }
 
-    do {
-      try irc_msgSend(message)
-    }
-    catch let error as IRCDispatcherError {
-      // TBD:
-      print("handle dispatcher error:", error)
-    }
-    catch {
-      // TBD:
-      print("handle generic error:", type(of: error), error)
-    }
-
+    dispatch(message)
   }
   
   func handlerCaughtError(_ error: Swift.Error,
@@ -564,8 +508,6 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
       self.client = client
     }
     
-    func channelActive(context: ChannelHandlerContext) {
-    }
     func channelInactive(context: ChannelHandlerContext) {
       client.handlerDidDisconnect(context)
     }
@@ -583,9 +525,11 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
 
   
   // MARK: - Writing
-  
-  public var origin : String? { return nil }
-  
+
+  public func send(_ command: IRCCommand) {
+    sendMessages([ IRCMessage(command: command) ], promise: nil)
+  }
+
   public func sendMessages<T: Collection>(_ messages: T,
                                           promise: EventLoopPromise<Void>?)
                 where T.Element == IRCMessage
@@ -658,44 +602,45 @@ nonisolated extension IRCCommand {
   
 }
 
-nonisolated extension IRCClient : IRCDispatcher {
+nonisolated extension IRCClient {
 
-  public func irc_msgSend(_ message: IRCMessage) throws {
-    // Handle NICK and QUIT BEFORE the dispatcher to prevent doNick() being called for other users
+  /// Routes a post-registration-handling message to the matching delegate callback.
+  /// Anything without a dedicated callback goes to `client(_:received:)`.
+  func dispatch(_ message: IRCMessage) {
     switch message.command {
+      case .PING(let server, _):
+        // Clients answer by echoing the PING token; server2 is only meaningful for
+        // server-to-server forwarding, so it's intentionally not echoed.
+        send(.PONG(server: server, server2: nil))
+
+      case .PRIVMSG(let recipients, let text):
+        guard let origin = message.origin, let sender = IRCUserID(origin) else { return }
+        delegate?.client(self, message: text, from: sender, for: recipients,
+                         serverTime: message.serverTime)
+
+      case .NOTICE(let recipients, let text):
+        delegate?.client(self, notice: text, for: recipients,
+                         serverTime: message.serverTime)
+
+      case .MODE(let nick, let add, let remove):
+        updateUserMode(of: nick, add: add, remove: remove)
+
       case .NICK(let newNick):
         guard let origin = message.origin, let user = IRCUserID(origin) else {
           return print("ERROR: NICK is missing a proper origin:", message)
         }
-        // Check if this is us changing our nick or someone else
         if let myNick = state.nick, myNick == user.nick {
-          // It's us - update our state and notify
-          try? doNick(newNick)
+          changeOwnNick(to: newNick)
         } else {
-          // It's someone else - notify delegate
           delegate?.client(self, user: user, changedNickTo: newNick)
         }
-        return  // Don't let dispatcher handle this
 
       case .QUIT(let quitMessage):
         guard let origin = message.origin, let user = IRCUserID(origin) else {
           return print("ERROR: QUIT is missing a proper origin:", message)
         }
         delegate?.client(self, userQuit: user, message: quitMessage)
-        return  // Don't let dispatcher handle this
 
-      default:
-        break  // Let dispatcher handle everything else
-    }
-
-    do {
-      return try irc_defaultMsgSend(message)
-    }
-    catch let error as IRCDispatcherError {
-      guard case .doesNotRespondTo = error else { throw error }
-    }
-
-    switch message.command {
       /* Message of the Day coalescing */
       case .numeric(.replyMotDStart, let args):
         messageOfTheDay = (args.last ?? "") + "\n"
@@ -718,8 +663,6 @@ nonisolated extension IRCClient : IRCDispatcher {
         }
         delegate?.client(self, changeTopic: args[2], of: channel)
 
-      /* join/part, we need the origin here ... (fix dispatcher) */
-        
       case .JOIN(let channels, _):
         guard let origin = message.origin, let user = IRCUserID(origin) else {
           return print("ERROR: JOIN is missing a proper origin:", message)
@@ -732,31 +675,12 @@ nonisolated extension IRCClient : IRCDispatcher {
         }
         delegate?.client(self, user: user, left: channels, with: leaveMessage)
 
-      /* NICK and QUIT are now handled before the dispatcher - see top of irc_msgSend */
-
-      /* unexpected stuff */
-
       default:
         delegate?.client(self, received: message)
     }
   }
-  
-  public func doNotice(recipients: [ IRCMessageRecipient ], message: String,
-                       serverTime: Date?) throws
-  {
-    delegate?.client(self, notice: message, for: recipients, serverTime: serverTime)
-  }
 
-  public func doMessage(sender     : IRCUserID?,
-                      recipients : [ IRCMessageRecipient ],
-                      message    : String,
-                      serverTime : Date?) throws
-  {
-    guard let sender else { return }
-    delegate?.client(self, message: message, from: sender, for: recipients, serverTime: serverTime)
-  }
-
-  public func doNick(_ newNick: IRCNickName) throws {
+  private func changeOwnNick(to newNick: IRCNickName) {
     switch state {
       case .registering(let channel, let nick, let info):
         guard nick != newNick else { return }
@@ -772,27 +696,13 @@ nonisolated extension IRCClient : IRCDispatcher {
     delegate?.client(self, changedNickTo: newNick)
   }
   
-  public func doMode(nick: IRCNickName, add: IRCUserMode, remove: IRCUserMode)
-              throws
-  {
-    guard let myNick = state.nick, myNick == nick else {
-      return
-    }
-    
-    var newMode = userMode
-    newMode.subtract(remove)
-    newMode.formUnion(add)
+  private func updateUserMode(of nick: IRCNickName, add: IRCUserMode, remove: IRCUserMode) {
+    guard let myNick = state.nick, myNick == nick else { return }
+
+    let newMode = userMode.subtracting(remove).union(add)
     if newMode != userMode {
       userMode = newMode
       delegate?.client(self, changedUserModeTo: newMode)
     }
-  }
-
-  public func doPing(_ server: String, server2: String? = nil) throws {
-    // Clients answer by echoing the PING token; server2 is only meaningful for
-    // server-to-server forwarding, so it's intentionally not echoed.
-    let msg = IRCMessage(origin: origin, // probably wrong
-                         command: .PONG(server: server, server2: nil))
-    sendMessage(msg)
   }
 }

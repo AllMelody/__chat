@@ -56,31 +56,30 @@ final class MessageRouter {
 
     func handleInputFromComposer(_ text: String, selection: UUID?, servers: [IRCServer], connectionService: IRCConnectionService) {
         func serverForSelection(_ id: UUID?) -> IRCServer? {
-            if let id {
-                if let s = servers.first(where: { $0.id == id }) { return s }
-                for s in servers {
-                    if s.channels.contains(where: { $0.id == id }) ||
-                       s.privateMessages.contains(where: { $0.id == id }) { return s }
+            guard let id else { return nil }
+            return servers.first { $0.id == id }
+                ?? servers.first { s in
+                    s.channels.contains { $0.id == id } || s.privateMessages.contains { $0.id == id }
                 }
-            }
-            return nil
         }
         func channelForSelection(_ id: UUID?) -> (server: IRCServer, channel: IRCChannel)? {
             guard let id else { return nil }
-            for s in servers { if let c = s.channels.first(where: { $0.id == id }) { return (s, c) } }
+            for s in servers {
+                if let c = s.channels.first(where: { $0.id == id }) { return (s, c) }
+            }
             return nil
         }
+        /// Feedback line in the selected channel, or else in the selected server's log.
         func log(_ message: String) {
+            let msg = ChatMessage(time: Date(), text: message)
             if let (_, c) = channelForSelection(selection) {
-                let msg = ChatMessage(time: Date(), text: message)
                 c.log.append(msg)
-                delegate?.messageRouter(self, didAppendMessage: msg)
-            }
-            else if let s = serverForSelection(selection) {
-                let msg = ChatMessage(time: Date(), text: message)
+            } else if let s = serverForSelection(selection) {
                 s.log.append(msg)
-                delegate?.messageRouter(self, didAppendMessage: msg)
+            } else {
+                return
             }
+            delegate?.messageRouter(self, didAppendMessage: msg)
         }
 
         switch MessageRouter.parse(text) {
@@ -96,7 +95,7 @@ final class MessageRouter {
             if let target {
                 // Part a specific channel by name
                 guard let s = serverForSelection(selection) else { log("No active server."); return }
-                if let channel = s.channels.first(where: { $0.name.lowercased() == target.lowercased() }) {
+                if let channel = s.channel(named: target) {
                     connectionService.partChannel(channel, from: s)
                 } else {
                     log("Not in channel \(target)")

@@ -25,10 +25,11 @@ final class ReconnectionManager {
 
     // MARK: - Public API
 
-    /// Schedule a reconnection attempt for the given server.
-    /// Returns true if scheduled, false if max attempts exhausted.
-    @discardableResult
-    func scheduleReconnection(for serverID: UUID, policy: Policy = .default) -> Bool {
+    /// Schedule a reconnection attempt for the given server, or report exhaustion to the
+    /// delegate once `Policy.default.maxAttempts` is used up.
+    func scheduleReconnection(for serverID: UUID) {
+        let policy = Policy.default
+
         // Cancel any pending attempt
         cancelReconnection(for: serverID)
 
@@ -39,7 +40,7 @@ final class ReconnectionManager {
         // Check if we've exhausted attempts
         guard attempt <= policy.maxAttempts else {
             delegate?.reconnectionManager(self, didExhaustAttempts: serverID, maxAttempts: policy.maxAttempts)
-            return false
+            return
         }
 
         // First attempt is immediate, subsequent attempts use the retry interval
@@ -62,8 +63,6 @@ final class ReconnectionManager {
                 self.delegate?.reconnectionManager(self, shouldReconnect: serverID)
             }
         }
-
-        return true
     }
 
     /// Cancel any pending reconnection for the given server.
@@ -77,15 +76,9 @@ final class ReconnectionManager {
         attempts.removeValue(forKey: serverID)
     }
 
-    /// Cancel all pending reconnections.
-    func cancelAll() {
+    deinit {
         for task in tasks.values {
             task.cancel()
         }
-        tasks.removeAll()
-    }
-
-    deinit {
-        cancelAll()
     }
 }

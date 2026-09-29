@@ -13,11 +13,11 @@ import Synchronization
 /// IRCClient.state from main — use registeredServerIDs instead.
 final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate {
     // Clients and connection state
-    var clients: [UUID: IRCClient] = [:]
-    var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
-    var pingTasks: [UUID: Task<Void, any Error>] = [:]
+    private(set) var clients: [UUID: IRCClient] = [:]
+    private var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
+    private var pingTasks: [UUID: Task<Void, any Error>] = [:]
     /// Monotonic, so wall-clock changes (NTP, manual edits) can't fake a dead connection.
-    var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
+    private var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
     private var selfNicks: [UUID: String] = [:]
 
     /// Server IDs for clients that have completed registration. Maintained ENTIRELY on the
@@ -39,7 +39,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     private var pathMonitorTask: Task<Void, Never>?
 
     // Default nick
-    var defaultNick: String = "Guest\(Int.random(in: 1000...9999))"
+    private let defaultNick = "Guest\(Int.random(in: 1000...9999))"
 
     /// When true, every received IRC message is echoed to the server log as a "RECV:" line.
     /// Off by default; mirrored from AppPreferences at launch and when toggled.
@@ -118,8 +118,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     /// the timers, leaking a live connect-timeout that could double-schedule reconnects).
     private func tearDownConnection(for serverID: UUID) {
         reconnectionManager.cancelReconnection(for: serverID)
-        pingTasks[serverID]?.cancel()
-        pingTasks.removeValue(forKey: serverID)
+        pingTasks.removeValue(forKey: serverID)?.cancel()
         lastPongReceived.removeValue(forKey: serverID)
         connectionTimeouts.removeValue(forKey: serverID)?.cancel()
 
@@ -238,7 +237,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         
         // Cancel any timers
         cancelConnectionTimeout(for: server)
-        cancelReconnectionTimer(for: server)
+        reconnectionManager.cancelReconnection(for: server.id)
         stopPingMonitoring(for: server)
         
         if let c = clients.removeValue(forKey: server.id) { c.close() }
@@ -297,11 +296,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
     
     func scheduleReconnection(for server: IRCServer) {
-        reconnectionManager.scheduleReconnection(for: server.id, policy: .default)
-    }
-
-    func cancelReconnectionTimer(for server: IRCServer) {
-        reconnectionManager.cancelReconnection(for: server.id)
+        reconnectionManager.scheduleReconnection(for: server.id)
     }
 
     func resetReconnectionAttempts(for server: IRCServer) {
@@ -352,10 +347,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func stopPingMonitoring(for server: IRCServer) {
+    private func stopPingMonitoring(for server: IRCServer) {
         dispatchPrecondition(condition: .onQueue(.main))
-        pingTasks[server.id]?.cancel()
-        pingTasks.removeValue(forKey: server.id)
+        pingTasks.removeValue(forKey: server.id)?.cancel()
         lastPongReceived.removeValue(forKey: server.id)
     }
     
@@ -391,11 +385,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             scheduleReconnection(for: server)
         }
     }
-    
-    private func updateLastPongReceived(for serverID: UUID) {
-        lastPongReceived[serverID] = .now
-    }
-    
+
     // MARK: - Channel Operations
     
     func joinChannel(_ name: String, key: String? = nil, on server: IRCServer) {
@@ -411,12 +401,11 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             return
         }
 
+        let keys = key.map { [ $0 ] }
         if let ch = IRCChannelName(name) {
-            if let key { client.send(.JOIN(channels: [ ch ], keys: [ key ])) }
-            else { client.send(.JOIN(channels: [ ch ], keys: nil)) }
+            client.send(.JOIN(channels: [ ch ], keys: keys))
         } else {
-            if let key { client.send(.otherCommand("JOIN", [ name, key ])) }
-            else { client.send(.otherCommand("JOIN", [ name ])) }
+            client.send(.otherCommand("JOIN", [ name ] + (keys ?? [])))
         }
 
         _ = server.getOrCreateChannel(named: name)
@@ -589,7 +578,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
         promise.futureResult.whenFailure { [weak self] error in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self else { return }
                 print("⚠️ Write failed for server \(server.name): \(error)")
                 self.handleSendFailure(for: server, reason: "Write failed: \(error.localizedDescription)")
                 self.handleConnectionDead(for: server)
@@ -642,40 +631,33 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
     
     private nonisolated func formatIRCMessage(_ message: IRCMessage, direction: String) -> String {
+        let sender = message.origin ?? "server"
         switch message.command {
         case .numeric(let code, let args):
             let argsText = args.joined(separator: " ")
             return "\(direction): \(code.rawValue) \(argsText)"
         case .PRIVMSG(let recipients, let text):
-            let targets = recipients.map { $0.description }.joined(separator: ",")
-            let sender = message.origin?.description ?? "server"
+            let targets = recipients.map(\.description).joined(separator: ",")
             return "\(direction): \(sender) PRIVMSG \(targets) :\(text)"
         case .NOTICE(let recipients, let text):
-            let targets = recipients.map { $0.description }.joined(separator: ",")
-            let sender = message.origin?.description ?? "server"
+            let targets = recipients.map(\.description).joined(separator: ",")
             return "\(direction): \(sender) NOTICE \(targets) :\(text)"
         case .JOIN(channels: let channels, keys: _):
-            let channelNames = channels.map { $0.stringValue }.joined(separator: ",")
-            let sender = message.origin?.description ?? "server"
+            let channelNames = channels.map(\.stringValue).joined(separator: ",")
             return "\(direction): \(sender) JOIN \(channelNames)"
         case .PART(channels: let channels, message: let partMessage):
-            let channelNames = channels.map { $0.stringValue }.joined(separator: ",")
-            let sender = message.origin?.description ?? "server"
+            let channelNames = channels.map(\.stringValue).joined(separator: ",")
             let reasonText = partMessage.map { " :\($0)" } ?? ""
             return "\(direction): \(sender) PART \(channelNames)\(reasonText)"
         case .QUIT(let reason):
-            let sender = message.origin?.description ?? "server"
             let reasonText = reason.map { " :\($0)" } ?? ""
             return "\(direction): \(sender) QUIT\(reasonText)"
         case .NICK(let nick):
-            let sender = message.origin?.description ?? "server"
             return "\(direction): \(sender) NICK \(nick.stringValue)"
         case .MODE(let target, add: let add, remove: let remove):
-            let sender = message.origin?.description ?? "server"
             return "\(direction): \(sender) MODE \(target.stringValue) +\(add) -\(remove)"
         case .otherCommand(let command, let args):
             let argsText = args.joined(separator: " ")
-            let sender = message.origin?.description ?? "server"
             return "\(direction): \(sender) \(command) \(argsText)"
         default:
             return "\(direction): \(message.command)"
@@ -746,8 +728,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             }
 
             // Clean up all monitoring and timers for this server
-            pingTasks[serverID]?.cancel()
-            pingTasks.removeValue(forKey: serverID)
+            pingTasks.removeValue(forKey: serverID)?.cancel()
             lastPongReceived.removeValue(forKey: serverID)
             connectionTimeouts.removeValue(forKey: serverID)?.cancel()
             reconnectionManager.cancelReconnection(for: serverID)
@@ -845,7 +826,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             delegate?.ircConnectionService(self, didReceiveTopicChange: topic, for: channel, on: serverID, changedBy: nick)
 
         case .pong:
-            updateLastPongReceived(for: serverID)
+            lastPongReceived[serverID] = .now
 
         case .userList(let names, let channel):
             delegate?.ircConnectionService(self, didReceiveUserList: names, for: channel, on: serverID)
@@ -913,19 +894,12 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             post(.serverLog(formatIRCMessage(message, direction: "RECV"), time: nil), from: client)
         }
 
-        let isChannelPrivmsg: Bool = {
-            switch message.command {
-            case .PRIVMSG(let recipients, _):
-                return recipients.contains { if case .channel = $0 { return true } else { return false } }
-            default:
-                return false
-            }
-        }()
-        
-        guard !isChannelPrivmsg else { return }
-
         switch message.command {
-        case .PONG(_, _):
+        case .PRIVMSG(let recipients, _)
+            where recipients.contains(where: { if case .channel = $0 { true } else { false } }):
+            // Channel messages are delivered via client(_:message:from:for:serverTime:).
+            return
+        case .PONG:
             post(.pong, from: client)
         case .CAP(let subcmd, let capIDs):
             post(.serverLog("CAP \(subcmd.rawValue): \(capIDs.joined(separator: " "))", time: nil), from: client)
@@ -933,10 +907,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             guard !args.isEmpty else { return }
             let channelName = args.first(where: { $0.hasPrefix("#") }) ?? (args.count > 2 ? args[2] : "")
             let namesList = args.last ?? ""
-            let rawNames = namesList.split(separator: " ").map { String($0) }
-            let cleaned = rawNames.map { name -> String in
-                guard let first = name.first, "@+~&%".contains(first) else { return name }
-                return String(name.dropFirst())
+            let cleaned = namesList.split(separator: " ").map { name in
+                // Drop a leading channel-status prefix (op, voice, …).
+                String(name.first.map { "@+~&%".contains($0) } == true ? name.dropFirst() : name)
             }
             post(.userList(cleaned, channel: channelName), from: client)
         case .otherCommand("TOPIC", let args):
@@ -944,17 +917,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             guard args.count >= 2 else { break }
             let channelName = args[0]
             let newTopic = args[1]
-            let nick: String? = {
-                guard let origin = message.origin else { return nil }
-                // origin is "nick!user@host" — extract nick
-                if let bang = origin.firstIndex(of: "!") {
-                    return String(origin[origin.startIndex..<bang])
-                }
-                return origin
-            }()
+            // origin is "nick!user@host" — extract nick
+            let nick = message.origin.map { String($0.prefix { $0 != "!" }) }
             post(.topicChanged(newTopic, channel: channelName, by: nick), from: client)
-        case .numeric(.replyEndOfNames, _):
-            break
         case .numeric(.replyWhoReply, let args):
             let channelName = args.first(where: { $0.hasPrefix("#") }) ?? (args.count > 1 ? args[1] : "")
             let nick = args.count > 5 ? args[5] : ""
