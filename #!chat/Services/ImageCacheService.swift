@@ -13,8 +13,7 @@ final class ImageCacheService {
     private let imageCache = NSCache<NSString, NSImage>()
     private let imageCacheDirectory: URL = {
         // Use Caches directory - macOS can purge this under disk pressure
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let cacheDir = caches.appendingPathComponent("ChatApp/ImageCache")
+        let cacheDir = URL.cachesDirectory.appending(path: "ChatApp/ImageCache", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         return cacheDir
     }()
@@ -101,13 +100,7 @@ final class ImageCacheService {
     
     private func cacheKeyForURL(_ urlString: String) -> String {
         // Create a safe filename from URL using SHA256 hash
-        let data = urlString.data(using: .utf8) ?? Data()
-        let hash = data.withUnsafeBytes { bytes in
-            var hasher = SHA256()
-            hasher.update(bufferPointer: UnsafeRawBufferPointer(bytes))
-            return hasher.finalize()
-        }
-        return hash.compactMap { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data(urlString.utf8)).map { String(format: "%02x", $0) }.joined()
     }
     
     private func cachedImage(for urlString: String) -> NSImage? {
@@ -119,14 +112,14 @@ final class ImageCacheService {
         }
 
         // Check disk cache
-        let fileURL = imageCacheDirectory.appendingPathComponent("\(cacheKey).cache")
+        let fileURL = imageCacheDirectory.appending(path: "\(cacheKey).cache")
         guard let data = try? Data(contentsOf: fileURL),
               let image = NSImage(data: data) else {
             return nil
         }
 
         // Touch the file to update modification date (keeps frequently-used images from being pruned)
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path(percentEncoded: false))
 
         // Store in memory cache for next time
         imageCache.setObject(image, forKey: cacheKey as NSString)
@@ -272,7 +265,7 @@ final class ImageCacheService {
         request.timeoutInterval = 30.0
 
         let memoryKey = cacheKeyForURL(cacheKey)
-        let fileURL = imageCacheDirectory.appendingPathComponent("\(memoryKey).cache")
+        let fileURL = imageCacheDirectory.appending(path: "\(memoryKey).cache")
 
         Task { [weak self] in
             let data: Data
