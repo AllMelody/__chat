@@ -7,7 +7,13 @@ final class AppPreferences {
     /// when preferences aren't wired up yet.
     static let defaultMaxLogLines = 1000
 
-    var maxLogLines: Int { didSet { persist() } }
+    var maxLogLines: Int {
+        didSet {
+            // Clamp here so any binding (text field, stepper) can't store a degenerate cap.
+            if maxLogLines < 1 { maxLogLines = 1 }
+            persist()
+        }
+    }
     var showImageThumbnails: Bool { didSet { persist() } }
     var debugRawServerLog: Bool { didSet { persist() } }
 
@@ -21,7 +27,7 @@ final class AppPreferences {
 
     private func persist() {
         let d = UserDefaults.standard
-        d.set(max(1, maxLogLines), forKey: Keys.maxLogLines)
+        d.set(maxLogLines, forKey: Keys.maxLogLines)
         d.set(showImageThumbnails, forKey: Keys.showImageThumbnails)
         d.set(debugRawServerLog, forKey: Keys.debugRawServerLog)
     }

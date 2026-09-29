@@ -30,6 +30,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        @Bindable var model = model
         let splitView = AutosavingSplitView(left: { leftPane }, right: { rightPane }, autosaveName: "MainSplitRightWidth")
 
         let viewWithAppearance = splitView
@@ -41,15 +42,10 @@ struct ContentView: View {
             .onChange(of: activeState) { _, new in if new == .key { focusComposer() } }
             .onChange(of: model.selectedNodeID) { _, _ in focusComposer() }
 
-        let addServerBinding = Binding(get: { model.isPresentingAddServer }, set: { model.isPresentingAddServer = $0 })
-        let joinChannelBinding = Binding(get: { model.isPresentingJoinChannel }, set: { model.isPresentingJoinChannel = $0 })
-        let editServerBinding = Binding(get: { model.isPresentingEditServer }, set: { model.isPresentingEditServer = $0 })
-        let topicEditorBinding = Binding(get: { model.isPresentingTopicEditor }, set: { model.isPresentingTopicEditor = $0 })
-
         return viewWithStateChanges
-            .sheet(isPresented: addServerBinding) { ServerFormView() }
-            .sheet(isPresented: joinChannelBinding) { JoinChannelView() }
-            .sheet(isPresented: editServerBinding) {
+            .sheet(isPresented: $model.isPresentingAddServer) { ServerFormView() }
+            .sheet(isPresented: $model.isPresentingJoinChannel) { JoinChannelView() }
+            .sheet(isPresented: $model.isPresentingEditServer) {
                 Group {
                     if let server = model.server(withID: model.pendingEditServerID) {
                         ServerFormView(server: server)
@@ -59,7 +55,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .sheet(isPresented: topicEditorBinding) {
+            .sheet(isPresented: $model.isPresentingTopicEditor) {
                 if let channel = findChannel(id: model.selectedNodeID) {
                     TopicEditorView(channel: channel)
                 }
@@ -1014,28 +1010,27 @@ struct PreferencesView: View {
     }()
 
     var body: some View {
+        @Bindable var prefs = prefs
         VStack(alignment: .leading, spacing: 16) {
             Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 10) {
                 GridRow {
                     Text("Number of lines to keep in log:")
                     HStack(spacing: 8) {
-                        // trimLogs() applies a lowered cap to stored logs immediately;
-                        // otherwise memory is only reclaimed on the next received message.
-                        TextField("Lines", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), formatter: Self.numberFormatter)
+                        TextField("Lines", value: $prefs.maxLogLines, formatter: Self.numberFormatter)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
-                        Stepper("", value: Binding(get: { prefs.maxLogLines }, set: { prefs.maxLogLines = max(1, $0); model.trimLogs() }), in: 1...100000)
+                        Stepper("", value: $prefs.maxLogLines, in: 1...100000)
                             .labelsHidden()
                     }
                 }
                 GridRow {
                     Text("Show image thumbnails:")
-                    Toggle("", isOn: Binding(get: { prefs.showImageThumbnails }, set: { prefs.showImageThumbnails = $0 }))
+                    Toggle("", isOn: $prefs.showImageThumbnails)
                         .labelsHidden()
                 }
                 GridRow {
                     Text("Log raw server traffic (debug):")
-                    Toggle("", isOn: Binding(get: { prefs.debugRawServerLog }, set: { prefs.debugRawServerLog = $0 }))
+                    Toggle("", isOn: $prefs.debugRawServerLog)
                         .labelsHidden()
                 }
             }
@@ -1043,6 +1038,9 @@ struct PreferencesView: View {
         }
         .padding(20)
         .frame(width: 520)
+        // Apply a lowered cap to stored logs immediately; otherwise memory is only
+        // reclaimed on the next received message.
+        .onChange(of: prefs.maxLogLines) { _, _ in model.trimLogs() }
     }
 }
 
