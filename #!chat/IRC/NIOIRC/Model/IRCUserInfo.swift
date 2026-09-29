@@ -38,16 +38,6 @@ nonisolated public struct IRCUserInfo : Equatable, Sendable {
     self.realname   = realname
     self.usermask   = nil
   }
-
-  @inlinable
-  public static func ==(lhs: IRCUserInfo, rhs: IRCUserInfo) -> Bool {
-    if lhs.username   != rhs.username   { return false }
-    if lhs.realname   != rhs.realname   { return false }
-    if lhs.usermask   != rhs.usermask   { return false }
-    if lhs.servername != rhs.servername { return false }
-    if lhs.hostname   != rhs.hostname   { return false }
-    return true
-  }
 }
 
 nonisolated extension IRCUserInfo : CustomStringConvertible {

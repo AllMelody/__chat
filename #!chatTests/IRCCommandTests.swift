@@ -38,4 +38,12 @@ struct IRCCommandTests {
         #expect(withoutMillis.serverTime == Date(timeIntervalSince1970: 1_319_042_451))
         #expect(garbage.serverTime == nil)
     }
+
+    @Test func recipientEqualityIsCaseInsensitive() throws {
+        let a = try #require(IRCMessageRecipient("#Swift"))
+        let b = try #require(IRCMessageRecipient("#swift"))
+        #expect(a == b)
+        #expect(Set([a, b]).count == 1)
+        #expect(IRCMessageRecipient.everything != a)
+    }
 }

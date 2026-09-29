@@ -21,27 +21,9 @@ nonisolated public enum IRCMessageRecipient : Hashable, Sendable {
   // TODO:
   // or: user, or user%host, @server, etc
   // or: nickname!user@host
-
-  @inlinable
-  public func hash(into hasher: inout Hasher) {
-    switch self {
-      case .channel (let name): return name.hash(into: &hasher)
-      case .nickname(let name): return name.hash(into: &hasher)
-      case .everything:         return 42.hash(into: &hasher) // TBD?
-    }
-  }
-  
-  @inlinable
-  public static func ==(lhs: IRCMessageRecipient, rhs: IRCMessageRecipient)
-                  -> Bool
-  {
-    switch ( lhs, rhs ) {
-      case ( .everything,        .everything ):       return true
-      case ( .channel (let lhs), .channel (let rhs)): return lhs == rhs
-      case ( .nickname(let lhs), .nickname(let rhs)): return lhs == rhs
-      default: return false
-    }
-  }
+  //
+  // Equatable/Hashable are synthesized; they defer to the case-insensitive
+  // conformances of IRCChannelName and IRCNickName.
 }
 
 nonisolated public extension IRCMessageRecipient {
