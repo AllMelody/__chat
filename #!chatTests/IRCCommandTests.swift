@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import __chat
 
@@ -23,5 +24,18 @@ struct IRCCommandTests {
         #expect(IRCUserMode("ii") == .invisible)
         #expect(IRCChannelMode("oo") == .channelOperator)
         #expect(IRCChannelMode(String(repeating: "k", count: 100)) == .password)
+    }
+
+    @Test func serverTimeParsesWithAndWithoutFractionalSeconds() throws {
+        let withMillis = IRCMessage(command: .PING(server: "x", server2: nil),
+                                    tags: ["time": "2011-10-19T16:40:51.620Z"])
+        let withoutMillis = IRCMessage(command: .PING(server: "x", server2: nil),
+                                       tags: ["time": "2011-10-19T16:40:51Z"])
+        let garbage = IRCMessage(command: .PING(server: "x", server2: nil),
+                                 tags: ["time": "yesterday"])
+        let millis = try #require(withMillis.serverTime).timeIntervalSince1970
+        #expect(abs(millis - 1_319_042_451.620) < 0.001)
+        #expect(withoutMillis.serverTime == Date(timeIntervalSince1970: 1_319_042_451))
+        #expect(garbage.serverTime == nil)
     }
 }

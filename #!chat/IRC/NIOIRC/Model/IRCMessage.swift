@@ -66,14 +66,14 @@ nonisolated public struct IRCMessage : Codable, CustomStringConvertible, Sendabl
    */
   public var serverTime: Date? {
     guard let timeString = tags?["time"] else { return nil }
-    return IRCMessage.iso8601Formatter.date(from: timeString)
+    // A malformed tag just means "no server time", hence the optional parse. IRCv3
+    // specifies milliseconds, but accept timestamps without them too.
+    return (try? Date(timeString, strategy: IRCMessage.iso8601WithFraction))
+        ?? (try? Date(timeString, strategy: IRCMessage.iso8601))
   }
 
-  private static let iso8601Formatter: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter
-  }()
+  private static let iso8601WithFraction = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+  private static let iso8601 = Date.ISO8601FormatStyle()
 
   @inlinable
   public var description: String {
