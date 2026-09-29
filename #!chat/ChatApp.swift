@@ -1,14 +1,18 @@
 import SwiftUI
 
-
 @main
 struct ChatApp: App {
-    let preferences = AppPreferences()
-    let model: ChatStore
-    
+    // @State guarantees a single instance of each for the app's lifetime.
+    @State private var preferences: AppPreferences
+    @State private var model: ChatStore
+
     init() {
-        self.model = ChatStore()
+        let preferences = AppPreferences()
+        let model = ChatStore()
+        // ChatStore holds preferences weakly; @State keeps them alive.
         model.preferences = preferences
+        _preferences = State(initialValue: preferences)
+        _model = State(initialValue: model)
     }
 
     private var isChannelSelected: Bool {
