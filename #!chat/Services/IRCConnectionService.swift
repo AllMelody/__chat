@@ -36,8 +36,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     private let reconnectionManager = ReconnectionManager()
 
     // Network monitoring for immediate disconnect detection
-    private let pathMonitor = NWPathMonitor()
-    private let pathMonitorQueue = DispatchQueue(label: "io.github.AllMelody.__chat")
+    private var pathMonitorTask: Task<Void, Never>?
 
     // Default nick
     var defaultNick: String = "Guest\(Int.random(in: 1000...9999))"
@@ -75,7 +74,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
     deinit {
         clientEvents.continuation.finish()
-        pathMonitor.cancel()
+        pathMonitorTask?.cancel()
         // Cancel all connect timeouts
         for task in connectionTimeouts.values {
             task.cancel()
@@ -156,10 +155,10 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     private var networkWasUnavailable = false
 
     private func setupNetworkMonitoring() {
-        pathMonitor.pathUpdateHandler = { [weak self] path in
-            guard let self = self else { return }
-
-            DispatchQueue.main.async {
+        // Iterating the monitor starts it; cancelling the task stops it.
+        pathMonitorTask = Task { [weak self] in
+            for await path in NWPathMonitor() {
+                guard let self else { return }
                 if path.status == .satisfied {
                     // Network is available - reconnect servers if we previously lost network
                     if self.networkWasUnavailable {
@@ -173,7 +172,6 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
                 }
             }
         }
-        pathMonitor.start(queue: pathMonitorQueue)
     }
 
     private func handleNetworkLoss() {
