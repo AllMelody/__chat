@@ -2,7 +2,7 @@ import Foundation
 
 protocol ReconnectionManagerDelegate: AnyObject {
     func reconnectionManager(_ manager: ReconnectionManager, shouldReconnect serverID: UUID)
-    func reconnectionManager(_ manager: ReconnectionManager, didScheduleReconnect serverID: UUID, attempt: Int, delay: TimeInterval)
+    func reconnectionManager(_ manager: ReconnectionManager, didScheduleReconnect serverID: UUID, attempt: Int, delay: Duration)
     func reconnectionManager(_ manager: ReconnectionManager, didExhaustAttempts serverID: UUID, maxAttempts: Int)
 }
 
@@ -10,18 +10,18 @@ final class ReconnectionManager {
 
     struct Policy {
         let maxAttempts: Int
-        let retryInterval: TimeInterval  // Used for attempts after the first
+        let retryInterval: Duration  // Used for attempts after the first
 
         static let `default` = Policy(
             maxAttempts: 5,
-            retryInterval: 10.0
+            retryInterval: .seconds(10)
         )
     }
 
     weak var delegate: ReconnectionManagerDelegate?
 
     private var attempts: [UUID: Int] = [:]
-    private var timers: [UUID: Timer] = [:]
+    private var tasks: [UUID: Task<Void, any Error>] = [:]
 
     // MARK: - Public API
 
@@ -29,7 +29,7 @@ final class ReconnectionManager {
     /// Returns true if scheduled, false if max attempts exhausted.
     @discardableResult
     func scheduleReconnection(for serverID: UUID, policy: Policy = .default) -> Bool {
-        // Cancel any existing timer
+        // Cancel any pending attempt
         cancelReconnection(for: serverID)
 
         // Increment attempt counter
@@ -43,23 +43,24 @@ final class ReconnectionManager {
         }
 
         // First attempt is immediate, subsequent attempts use the retry interval
-        let delay: TimeInterval = (attempt == 1) ? 0 : policy.retryInterval
+        let delay: Duration = (attempt == 1) ? .zero : policy.retryInterval
 
         // Notify delegate about scheduled reconnection
         delegate?.reconnectionManager(self, didScheduleReconnect: serverID, attempt: attempt, delay: delay)
 
-        // For immediate reconnection, call directly; otherwise schedule a timer
-        if delay == 0 {
+        // For immediate reconnection, call directly; otherwise schedule a delayed task.
+        // Task.sleep only throws on cancellation, which simply ends the task.
+        if delay == .zero {
             delegate?.reconnectionManager(self, shouldReconnect: serverID)
         } else {
-            let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            tasks[serverID] = Task { [weak self] in
+                try await Task.sleep(for: delay)
+                // A cancel can land after the sleep finished but before we resumed on main.
+                try Task.checkCancellation()
                 guard let self else { return }
-                DispatchQueue.main.async {
-                    self.delegate?.reconnectionManager(self, shouldReconnect: serverID)
-                }
+                self.tasks[serverID] = nil
+                self.delegate?.reconnectionManager(self, shouldReconnect: serverID)
             }
-            RunLoop.main.add(timer, forMode: .common)
-            timers[serverID] = timer
         }
 
         return true
@@ -67,8 +68,7 @@ final class ReconnectionManager {
 
     /// Cancel any pending reconnection for the given server.
     func cancelReconnection(for serverID: UUID) {
-        timers[serverID]?.invalidate()
-        timers.removeValue(forKey: serverID)
+        tasks.removeValue(forKey: serverID)?.cancel()
     }
 
     /// Reset the attempt counter for the given server.
@@ -79,10 +79,10 @@ final class ReconnectionManager {
 
     /// Cancel all pending reconnections.
     func cancelAll() {
-        for timer in timers.values {
-            timer.invalidate()
+        for task in tasks.values {
+            task.cancel()
         }
-        timers.removeAll()
+        tasks.removeAll()
     }
 
     deinit {

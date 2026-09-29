@@ -320,13 +320,13 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         connect(server)
     }
 
-    func reconnectionManager(_ manager: ReconnectionManager, didScheduleReconnect serverID: UUID, attempt: Int, delay: TimeInterval) {
+    func reconnectionManager(_ manager: ReconnectionManager, didScheduleReconnect serverID: UUID, attempt: Int, delay: Duration) {
         guard let server = serverLookup?(serverID) else { return }
 
         server.connectionStatus = .reconnecting
         server.displayAttempt = attempt
 
-        logToServer("Reconnecting to \(server.name) in \(Int(delay)) seconds... (attempt \(attempt)/\(ReconnectionManager.Policy.default.maxAttempts))", on: server)
+        logToServer("Reconnecting to \(server.name) in \(delay.components.seconds) seconds... (attempt \(attempt)/\(ReconnectionManager.Policy.default.maxAttempts))", on: server)
     }
 
     func reconnectionManager(_ manager: ReconnectionManager, didExhaustAttempts serverID: UUID, maxAttempts: Int) {
