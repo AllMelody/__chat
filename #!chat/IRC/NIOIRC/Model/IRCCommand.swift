@@ -185,12 +185,13 @@ extension IRCCommand : CustomStringConvertible {
       case .WHO(.some(let usermask), false): return [ usermask ]
       case .WHO(.some(let usermask), true):  return [ usermask, "o" ]
 
+      case .CAP(let subcmd, let capIDs):
+        return capIDs.isEmpty ? [ subcmd.rawValue ]
+                              : [ subcmd.rawValue, capIDs.joined(separator: " ") ]
+
       case .numeric     (_, let args),
            .otherCommand(_, let args),
            .otherNumeric(_, let args): return args
-      
-      default: // TBD: which case do we miss???
-        fatalError("unexpected case \(self)")
     }
   }
   
