@@ -493,7 +493,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             logToServer(trimmed, on: server)
 
         case .channel, .privateMessage:
-            let lines = trimmed.components(separatedBy: "\n").filter { !$0.isEmpty }
+            // isNewline covers \n, \r and the single-Character \r\n, so no stray \r
+            // ends up inside an outgoing IRC line. Empty lines are omitted.
+            let lines = trimmed.split(whereSeparator: \.isNewline).map(String.init)
             guard !lines.isEmpty else { return }
             enqueueLines(lines, to: target, from: server)
         }
