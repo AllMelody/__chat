@@ -5,7 +5,7 @@ import Network
 import Synchronization
 
 /// Threading contract: all mutable state on this type (clients, connectionTimeouts, pingTasks,
-/// lastPongReceived, selfNicks, registeredServerIDs, messageQueue, queueTimer) and all IRCServer
+/// lastPongReceived, selfNicks, registeredServerIDs, messageQueue, queueTask) and all IRCServer
 /// model mutation MUST happen on the main thread. IRCClientDelegate callbacks arrive on the NIO
 /// event loop (they're `nonisolated`) and forward a ClientEvent through an AsyncStream that is
 /// drained in order on the main actor before touching any of it.
@@ -27,9 +27,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
     // Message send queue (flood protection)
     private var messageQueue: [(text: String, target: MessageTarget, server: IRCServer)] = []
-    private var queueTimer: Timer?
+    private var queueTask: Task<Void, any Error>?
     private let burstLimit = 5
-    private let queueInterval: TimeInterval = 0.5
+    private let queueInterval: Duration = .milliseconds(500)
 
     // Reconnection handling
     private let reconnectionManager = ReconnectionManager()
@@ -84,7 +84,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         for task in pingTasks.values {
             task.cancel()
         }
-        queueTimer?.invalidate()
+        queueTask?.cancel()
         // Reconnection manager cleans up in its own deinit
     }
 
@@ -141,8 +141,8 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
 
     private func clearMessageQueue() {
-        queueTimer?.invalidate()
-        queueTimer = nil
+        queueTask?.cancel()
+        queueTask = nil
         messageQueue.removeAll()
     }
 
@@ -247,7 +247,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         selfNicks.removeValue(forKey: server.id)
         registeredServerIDs.remove(server.id)
         messageQueue.removeAll { $0.server.id == server.id }
-        if messageQueue.isEmpty { queueTimer?.invalidate(); queueTimer = nil }
+        if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
         server.channels.removeAll()
         server.connectionStatus = .disconnected
         server.displayAttempt = 0
@@ -553,19 +553,25 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             messageQueue.append((text: line, target: target, server: server))
         }
 
-        if !messageQueue.isEmpty && queueTimer == nil {
-            let timer = Timer.scheduledTimer(withTimeInterval: queueInterval, repeats: true) { [weak self] _ in
-                DispatchQueue.main.async { self?.drainQueue() }
+        if !messageQueue.isEmpty && queueTask == nil {
+            // Sends one queued line per interval until drainQueue() empties the queue and
+            // clears queueTask. Task.sleep only throws on cancellation, which ends the loop.
+            queueTask = Task { [weak self, queueInterval] in
+                while true {
+                    try await Task.sleep(for: queueInterval)
+                    try Task.checkCancellation()
+                    guard let self else { return }
+                    self.drainQueue()
+                    if self.queueTask == nil { return }
+                }
             }
-            RunLoop.main.add(timer, forMode: .common)
-            queueTimer = timer
         }
     }
 
     private func drainQueue() {
         guard !messageQueue.isEmpty else {
-            queueTimer?.invalidate()
-            queueTimer = nil
+            queueTask?.cancel()
+            queueTask = nil
             return
         }
 
@@ -573,8 +579,8 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         sendSingleLine(item.text, to: item.target, from: item.server)
 
         if messageQueue.isEmpty {
-            queueTimer?.invalidate()
-            queueTimer = nil
+            queueTask?.cancel()
+            queueTask = nil
         }
     }
 
@@ -754,7 +760,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
             // Discard queued messages for this server
             messageQueue.removeAll { $0.server.id == serverID }
-            if messageQueue.isEmpty { queueTimer?.invalidate(); queueTimer = nil }
+            if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
 
             // Notify delegate so it can trigger reconnection if needed
             delegate?.ircConnectionService(self, serverDidDisconnect: serverID)
