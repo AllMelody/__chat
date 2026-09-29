@@ -18,4 +18,10 @@ struct IRCCommandTests {
         #expect(subcmd == .REQ)
         #expect(ids == ["server-time", "multi-prefix"])
     }
+
+    @Test func repeatedModeLettersDoNotChangeMeaning() {
+        #expect(IRCUserMode("ii") == .invisible)
+        #expect(IRCChannelMode("oo") == .channelOperator)
+        #expect(IRCChannelMode(String(repeating: "k", count: 100)) == .password)
+    }
 }

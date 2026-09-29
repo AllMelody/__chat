@@ -47,18 +47,18 @@ public struct IRCUserMode : OptionSet {
     var mask : UInt16 = 0
     for c in string {
       switch c {
-        case "w": mask += IRCUserMode.receivesWallOps      .rawValue
-        case "i": mask += IRCUserMode.invisible            .rawValue
-        case "a": mask += IRCUserMode.away                 .rawValue
-        case "r": mask += IRCUserMode.restrictedConnection .rawValue
-        case "o": mask += IRCUserMode.operator             .rawValue
-        case "O": mask += IRCUserMode.localOperator        .rawValue
-        case "s": mask += IRCUserMode.receivesServerNotices.rawValue
-        case "g": mask += IRCUserMode.ignoreUnknown        .rawValue
-        case "Q": mask += IRCUserMode.disableForwarding    .rawValue
-        case "R": mask += IRCUserMode.blockUnidentified    .rawValue
-        case "Z": mask += IRCUserMode.connectedSecurely    .rawValue
-        case "x": mask += IRCUserMode.hideHostname         .rawValue
+        case "w": mask |= IRCUserMode.receivesWallOps      .rawValue
+        case "i": mask |= IRCUserMode.invisible            .rawValue
+        case "a": mask |= IRCUserMode.away                 .rawValue
+        case "r": mask |= IRCUserMode.restrictedConnection .rawValue
+        case "o": mask |= IRCUserMode.operator             .rawValue
+        case "O": mask |= IRCUserMode.localOperator        .rawValue
+        case "s": mask |= IRCUserMode.receivesServerNotices.rawValue
+        case "g": mask |= IRCUserMode.ignoreUnknown        .rawValue
+        case "Q": mask |= IRCUserMode.disableForwarding    .rawValue
+        case "R": mask |= IRCUserMode.blockUnidentified    .rawValue
+        case "Z": mask |= IRCUserMode.connectedSecurely    .rawValue
+        case "x": mask |= IRCUserMode.hideHostname         .rawValue
         default: return nil
       }
     }

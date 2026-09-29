@@ -41,17 +41,17 @@ public struct IRCChannelMode : OptionSet {
     var mask : UInt16 = 0
     for c in string {
       switch c {
-        case "o": mask += IRCChannelMode.channelOperator.rawValue
-        case "p": mask += IRCChannelMode.`private`.rawValue
-        case "s": mask += IRCChannelMode.secret.rawValue
-        case "i": mask += IRCChannelMode.inviteOnly.rawValue
-        case "t": mask += IRCChannelMode.topicOnlyByOperator.rawValue
-        case "n": mask += IRCChannelMode.noOutsideClients.rawValue
-        case "m": mask += IRCChannelMode.moderated.rawValue
-        case "l": mask += IRCChannelMode.userLimit.rawValue
-        case "b": mask += IRCChannelMode.banMask.rawValue
-        case "v": mask += IRCChannelMode.speakControl.rawValue
-        case "k": mask += IRCChannelMode.password.rawValue
+        case "o": mask |= IRCChannelMode.channelOperator.rawValue
+        case "p": mask |= IRCChannelMode.`private`.rawValue
+        case "s": mask |= IRCChannelMode.secret.rawValue
+        case "i": mask |= IRCChannelMode.inviteOnly.rawValue
+        case "t": mask |= IRCChannelMode.topicOnlyByOperator.rawValue
+        case "n": mask |= IRCChannelMode.noOutsideClients.rawValue
+        case "m": mask |= IRCChannelMode.moderated.rawValue
+        case "l": mask |= IRCChannelMode.userLimit.rawValue
+        case "b": mask |= IRCChannelMode.banMask.rawValue
+        case "v": mask |= IRCChannelMode.speakControl.rawValue
+        case "k": mask |= IRCChannelMode.password.rawValue
         default: return nil
       }
     }
