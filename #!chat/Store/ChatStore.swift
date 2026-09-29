@@ -40,8 +40,10 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         setupServices()
         loadServers()
         // Delay auto-connect to ensure UI is ready
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in 
-            self?.autoConnectFlaggedServers() 
+        Task { [weak self] in
+            // This task is never cancelled, so the sleep cannot throw.
+            try! await Task.sleep(for: .milliseconds(100))
+            self?.autoConnectFlaggedServers()
         }
     }
     
