@@ -131,16 +131,6 @@ struct IRCServerRecord: Codable {
         // password intentionally not encoded
     }
 
-    // Decode still reads password from legacy JSON (decodeIfPresent -> nil for new JSON).
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        name = try c.decode(String.self, forKey: .name)
-        host = try c.decode(String.self, forKey: .host)
-        port = try c.decode(Int.self, forKey: .port)
-        password = try c.decodeIfPresent(String.self, forKey: .password)
-        useTLS = try c.decodeIfPresent(Bool.self, forKey: .useTLS)
-        autoConnectOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .autoConnectOnLaunch)
-        nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
-    }
+    // Decoding is synthesized: optionals use decodeIfPresent, so `password` is still read
+    // from legacy JSON and is nil for new JSON.
 }
