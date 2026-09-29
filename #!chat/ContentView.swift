@@ -256,14 +256,9 @@ private struct ComposerTextField: NSViewRepresentable {
         // Reset foreground color to default (prevents color bleed from typing near symbols)
         storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
         // Color each newline symbol
-        let text = storage.string as NSString
-        var searchRange = NSRange(location: 0, length: text.length)
-        while searchRange.location < text.length {
-            let found = text.range(of: newlineSymbol, range: searchRange)
-            if found.location == NSNotFound { break }
-            storage.addAttribute(.foregroundColor, value: newlineSymbolColor, range: found)
-            searchRange.location = found.location + found.length
-            searchRange.length = text.length - searchRange.location
+        let text = storage.string
+        for range in text.ranges(of: newlineSymbol) {
+            storage.addAttribute(.foregroundColor, value: newlineSymbolColor, range: NSRange(range, in: text))
         }
     }
 
@@ -520,7 +515,7 @@ private struct LogTextView: NSViewRepresentable {
             for m in messagesToHash {
                 let arr = thumbnailsByMessage[m.id] ?? []
                 hash = hash &* 31 &+ arr.count
-                let loadedCount = arr.reduce(0) { $0 + ($1.image == nil ? 0 : 1) }
+                let loadedCount = arr.count(where: { $0.image != nil })
                 hash = hash &* 31 &+ loadedCount
             }
             return hash
@@ -589,15 +584,10 @@ private struct LogTextView: NSViewRepresentable {
         // message changed its thumbnail fingerprint. Anything else — selection change, front
         // truncation from maxLogLines, or a thumbnail loading on an existing message — falls
         // back to a full rebuild.
-        var canAppend = !forceFullRebuild
+        let canAppend = !forceFullRebuild
             && newIDs.count > prior.count
-            && Array(newIDs.prefix(prior.count)) == prior
-        if canAppend {
-            for id in prior where coordinator.renderedThumbFingerprints[id] != thumbnailFingerprint(for: id) {
-                canAppend = false
-                break
-            }
-        }
+            && newIDs.starts(with: prior)
+            && prior.allSatisfy { coordinator.renderedThumbFingerprints[$0] == thumbnailFingerprint(for: $0) }
 
         if canAppend {
             let appended = NSMutableAttributedString()
@@ -646,7 +636,7 @@ private struct LogTextView: NSViewRepresentable {
         guard showThumbnails else { return 0 }
         let arr = thumbnailsByMessage[id] ?? []
         var fp = arr.count
-        let loaded = arr.reduce(0) { $0 + ($1.image == nil ? 0 : 1) }
+        let loaded = arr.count(where: { $0.image != nil })
         fp = fp &* 31 &+ loaded
         return fp
     }

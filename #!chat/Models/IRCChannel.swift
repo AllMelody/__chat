@@ -20,7 +20,7 @@ final class IRCChannel: Identifiable, Hashable {
 
     /// Check if a user is present in the channel (case-insensitive)
     func hasUser(_ nick: String) -> Bool {
-        users.contains(where: { $0.lowercased() == nick.lowercased() })
+        users.contains(where: { $0.caseInsensitiveCompare(nick) == .orderedSame })
     }
 
     /// Add a user to the channel if not already present (case-insensitive check)
@@ -32,12 +32,12 @@ final class IRCChannel: Identifiable, Hashable {
 
     /// Remove a user from the channel (case-insensitive)
     func removeUser(_ nick: String) {
-        users.removeAll { $0.lowercased() == nick.lowercased() }
+        users.removeAll { $0.caseInsensitiveCompare(nick) == .orderedSame }
     }
 
     /// Update a user's nickname (case-insensitive search, preserves case of new nick)
     func updateUserNick(from oldNick: String, to newNick: String) {
-        if let index = users.firstIndex(where: { $0.lowercased() == oldNick.lowercased() }) {
+        if let index = users.firstIndex(where: { $0.caseInsensitiveCompare(oldNick) == .orderedSame }) {
             users[index] = newNick
         }
     }
