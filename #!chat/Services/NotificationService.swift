@@ -5,7 +5,7 @@ import UserNotifications
 /// back to the conversation that triggered them.
 ///
 /// Threading: create and use on the main thread (owned by ChatStore). Delegate callbacks
-/// from UNUserNotificationCenter arrive on an arbitrary queue and hop to main before
+/// from UNUserNotificationCenter are `nonisolated` and hop to the main actor before
 /// touching `onSelectNode`.
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Called on the main thread with the node ID (channel/PM) stored in a clicked
@@ -38,22 +38,18 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Show banners even while the app is frontmost — ChatStore already skips posting when
     /// the mentioning conversation is the one on screen, so anything that reaches here is
     /// for a conversation the user is not looking at.
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .sound])
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                didReceive response: UNNotificationResponse,
-                                withCompletionHandler completionHandler: @escaping () -> Void) {
-        if let idString = response.notification.request.content.userInfo["nodeID"] as? String,
-           let nodeID = UUID(uuidString: idString) {
-            DispatchQueue.main.async { [weak self] in
-                NSApp.activate(ignoringOtherApps: true)
-                self?.onSelectNode?(nodeID)
-            }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        guard let idString = response.notification.request.content.userInfo["nodeID"] as? String,
+              let nodeID = UUID(uuidString: idString) else { return }
+        await MainActor.run {
+            NSApp.activate()
+            onSelectNode?(nodeID)
         }
-        completionHandler()
     }
 }
