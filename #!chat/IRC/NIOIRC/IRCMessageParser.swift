@@ -133,8 +133,9 @@ nonisolated public struct IRCMessageParser {
 
     func makeString(from slice: Swift.Slice<UnsafeRawBufferPointer>?) -> String?
     {
-      guard let slice = slice else { return nil }
-      return String(data: Data(slice), encoding: .utf8) // Sigh, the pain.
+      guard let slice else { return nil }
+      // Validates in place; invalid UTF-8 yields nil, as before, without a Data copy.
+      return String(validating: slice, as: UTF8.self)
     }
 
     /* parse IRCv3 tags (if present) */
