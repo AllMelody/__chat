@@ -33,14 +33,14 @@ nonisolated public extension IRCCommand {
       }
     }
     func expect(min: Int? = nil, max: Int? = nil) throws(IRCParserError) {
-      if let max = max {
+      if let max {
         guard arguments.count <= max else {
           throw Error.invalidArgumentCount(command: command,
                                            count: arguments.count,
                                            expected: max)
         }
       }
-      if let min = min {
+      if let min {
         guard arguments.count >= min else {
           throw Error.invalidArgumentCount(command: command,
                                            count: arguments.count,

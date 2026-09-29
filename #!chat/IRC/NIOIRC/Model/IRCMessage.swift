@@ -78,8 +78,8 @@ nonisolated public struct IRCMessage : Codable, CustomStringConvertible, Sendabl
   @inlinable
   public var description: String {
     var ms = "<IRCMsg:"
-    if let origin = origin { ms += " from=\(origin)" }
-    if let target = target { ms += " to=\(target)" }
+    if let origin { ms += " from=\(origin)" }
+    if let target { ms += " to=\(target)" }
     ms += " "
     ms += command.description
     ms += ">"

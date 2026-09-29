@@ -591,7 +591,7 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
                 where T.Element == IRCMessage
   {
     // TBD: this looks a little more difficult than necessary.
-    guard let channel = channel else {
+    guard let channel else {
       promise?.fail(Error.stopped)
       return
     }
@@ -611,7 +611,7 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
       return channel.writeAndFlush(messages.first!, promise: promise)
     }
     
-    guard let promise = promise else {
+    guard let promise else {
       for message in messages {
         channel.write(message, promise: nil)
       }
@@ -753,7 +753,7 @@ nonisolated extension IRCClient : IRCDispatcher {
                       message    : String,
                       serverTime : Date?) throws
   {
-    guard let sender = sender else { return }
+    guard let sender else { return }
     delegate?.client(self, message: message, from: sender, for: recipients, serverTime: serverTime)
   }
 

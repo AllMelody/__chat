@@ -43,7 +43,7 @@ nonisolated open class ConnectOptions : CustomStringConvertible {
   }
   
   open func appendToDescription(_ ms: inout String) {
-    if let hostname = hostname { ms += " \(hostname):\(port)" }
+    if let hostname { ms += " \(hostname):\(port)" }
     else { ms += " \(port)" }
   }
   

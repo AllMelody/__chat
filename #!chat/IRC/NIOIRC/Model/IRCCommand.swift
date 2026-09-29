@@ -139,7 +139,7 @@ nonisolated extension IRCCommand : CustomStringConvertible {
         return [ channels.map { $0.stringValue }.joined(separator: ","), m ]
 
       case .LIST(let channels, .none):
-        guard let channels = channels else { return [] }
+        guard let channels else { return [] }
         return [ channels.map { $0.stringValue }.joined(separator: ",") ]
       case .LIST(let channels, .some(let target)):
         return [ (channels ?? []).map { $0.stringValue }.joined(separator: ","),
@@ -199,7 +199,7 @@ nonisolated extension IRCCommand : CustomStringConvertible {
   public var description : String {
     switch self {
       case .PING(let server, let server2), .PONG(let server, let server2):
-        if let server2 = server2 {
+        if let server2 {
           return "\(commandAsString) '\(server)' '\(server2)'"
         }
         else {

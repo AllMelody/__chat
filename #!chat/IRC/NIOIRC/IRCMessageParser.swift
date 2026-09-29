@@ -275,7 +275,7 @@ nonisolated public struct IRCMessageParser {
     /* construct */
 
     let origin: String?
-    if let source = source {
+    if let source {
       guard let sourceString = makeString(from: source) else {
         throw Error.invalidPrefix(Data(line))
       }

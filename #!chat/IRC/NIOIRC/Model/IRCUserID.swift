@@ -65,8 +65,8 @@ nonisolated public struct IRCUserID : Hashable, CustomStringConvertible, Sendabl
   @inlinable
   public var stringValue : String {
     var ms = "\(nick)"
-    if let host = host {
-      if let user = user { ms += "!\(user)" }
+    if let host {
+      if let user { ms += "!\(user)" }
       ms += "@\(host)"
     }
     return ms

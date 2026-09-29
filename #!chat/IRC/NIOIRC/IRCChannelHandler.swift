@@ -67,10 +67,10 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
     let buffer = self.unwrapInboundIn(data)
     
     parser.feed(buffer) { error, message in
-      if let message = message {
+      if let message {
         channelRead(context: context, value: message)
       }
-      if let error = error {
+      if let error {
         context.fireErrorCaught(error)
       }
     }
@@ -132,7 +132,7 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
     
     switch value.command {
       case .PING(let s, let s2), .PONG(let s, let s2):
-        if let s2 = s2 {
+        if let s2 {
           buffer.writeInteger(cSpace)
           buffer.writeString(s)
           buffer.writeLastArgument(s2)
@@ -207,18 +207,18 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
       
       case .JOIN(let channels, let keys):
         buffer.writeCSVArgument(channels.lazy.map { $0.stringValue })
-        if let keys = keys { buffer.writeCSVArgument(keys) }
+        if let keys { buffer.writeCSVArgument(keys) }
       
       case .PART(let channels, let message):
         buffer.writeCSVArgument(channels.lazy.map { $0.stringValue })
-        if let message = message { buffer.writeLastArgument(message) }
+        if let message { buffer.writeLastArgument(message) }
       
       case .LIST(let channels, let target):
-        if let channels = channels {
+        if let channels {
           buffer.writeCSVArgument(channels.lazy.map { $0.stringValue })
         }
         else { buffer.writeString(" *") }
-        if let target = target { buffer.writeLastArgument(target) }
+        if let target { buffer.writeLastArgument(target) }
       
       case .PRIVMSG(let recipients, let message),
            .NOTICE (let recipients, let message):
@@ -231,7 +231,7 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
         buffer.writeLastArgument(capIDs.joined(separator: " "))
 
       case .WHOIS(let target, let masks):
-        if let target = target {
+        if let target {
           buffer.writeInteger(cSpace)
           buffer.writeString(target)
         }
@@ -239,7 +239,7 @@ nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
         buffer.writeString(masks.joined(separator: ","))
 
       case .WHO(let mask, let opOnly):
-        if let mask = mask {
+        if let mask {
           buffer.writeInteger(cSpace)
           buffer.writeString(mask)
           if opOnly {
