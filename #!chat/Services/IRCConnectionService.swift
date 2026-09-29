@@ -791,8 +791,8 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
                 if case .channel(let chName) = r {
                     let name = chName.stringValue
                     let selfNick = selfNicks[serverID]
-                    let isMine = (selfNick != nil && user.nick.stringValue.compare(selfNick!, options: .caseInsensitive) == .orderedSame)
-                    let isHighlight = !isMine && selfNick != nil && Formatting.mentionsNick(selfNick!, in: message)
+                    let isMine = selfNick.map { user.nick.stringValue.caseInsensitiveCompare($0) == .orderedSame } ?? false
+                    let isHighlight = !isMine && selfNick.map { Formatting.mentionsNick($0, in: message) } ?? false
                     let m = ChatMessage(time: time, text: message, senderNick: user.nick.stringValue, isPrivmsg: true, isFromMe: isMine, isHighlight: isHighlight)
                     delegate?.ircConnectionService(self, didReceiveMessage: m, for: serverID, target: .channel(name, isMine: isMine))
                 } else if case .nickname(let targetNick) = r {

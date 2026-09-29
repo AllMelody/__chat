@@ -674,7 +674,7 @@ private struct LogTextView: NSViewRepresentable {
 
         if msg.isPrivmsg, let nick = msg.senderNick {
             // Chat line: colored nick, gray colon, body in label color
-            let isMine = msg.isFromMe || (myNick != nil && nick.compare(myNick!, options: .caseInsensitive) == .orderedSame)
+            let isMine = msg.isFromMe || myNick.map { nick.caseInsensitiveCompare($0) == .orderedSame } ?? false
             combined.append(NSAttributedString(string: nick, attributes: isMine ? myNickAttrs : otherNickAttrs))
             combined.append(NSAttributedString(string: ": ", attributes: grayAttrs))
 
