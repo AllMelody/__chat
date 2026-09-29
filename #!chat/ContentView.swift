@@ -854,7 +854,7 @@ struct SidebarRowBase<Content: View>: View {
             }
             .padding(.horizontal, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundColor(fgColor)
+            .foregroundStyle(fgColor)
         }
         .contentShape(Rectangle())
     }
@@ -888,14 +888,14 @@ struct ServerRow: View {
         SidebarRowBase(isSelected: isSelected, indent: 0, rowHeight: rowHeight, activeState: activeState) {
             Image(systemName: node.systemImageName)
                 .frame(width: iconColWidth, alignment: .center)
-                .foregroundColor(statusColor)
+                .foregroundStyle(statusColor)
             Text(node.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
             
             // Status indicator for connecting/reconnecting states
             if server.connectionStatus == .connecting || server.connectionStatus == .reconnecting {
                 Image(systemName: "ellipsis")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .symbolEffect(.variableColor.iterative, isActive: true)
             }
         }
