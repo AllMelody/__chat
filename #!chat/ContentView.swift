@@ -791,20 +791,15 @@ private struct LogTextView: NSViewRepresentable {
                 return originalImage
             }
             
-            // Create a new image with proper scaling
-            let scaledImage = NSImage(size: imageBounds.size)
-            scaledImage.lockFocus()
-            
-            let context = NSGraphicsContext.current?.cgContext
-            context?.interpolationQuality = .high
-            
-            originalImage.draw(in: NSRect(origin: .zero, size: imageBounds.size),
-                             from: NSRect(origin: .zero, size: originalImage.size),
-                             operation: .sourceOver,
-                             fraction: 1.0)
-            
-            scaledImage.unlockFocus()
-            return scaledImage
+            // Drawing-handler images render lazily at the destination's backing scale
+            return NSImage(size: imageBounds.size, flipped: false) { rect in
+                NSGraphicsContext.current?.imageInterpolation = .high
+                originalImage.draw(in: rect,
+                                   from: NSRect(origin: .zero, size: originalImage.size),
+                                   operation: .sourceOver,
+                                   fraction: 1.0)
+                return true
+            }
         }
     }
 
@@ -832,20 +827,16 @@ private struct LogTextView: NSViewRepresentable {
             return sourceImage
         }
         
-        // Create a new properly-sized image
-        let resizedImage = NSImage(size: finalSize)
-        resizedImage.lockFocus()
-        
-        // Set high quality interpolation
-        NSGraphicsContext.current?.imageInterpolation = .high
-        
-        sourceImage.draw(in: NSRect(origin: .zero, size: finalSize),
-                        from: NSRect(origin: .zero, size: sourceSize),
-                        operation: .sourceOver,
-                        fraction: 1.0)
-        
-        resizedImage.unlockFocus()
-        return resizedImage
+        // Create a new properly-sized image; the drawing handler renders lazily at the
+        // destination's backing scale, so it stays sharp on Retina displays.
+        return NSImage(size: finalSize, flipped: false) { rect in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            sourceImage.draw(in: rect,
+                             from: NSRect(origin: .zero, size: sourceSize),
+                             operation: .sourceOver,
+                             fraction: 1.0)
+            return true
+        }
     }
 
     private func makeImageAttachment(_ img: NSImage, maxSize: NSSize) -> NSTextAttachment {
