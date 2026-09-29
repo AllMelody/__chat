@@ -1002,13 +1002,6 @@ struct PreferencesView: View {
     @Environment(AppPreferences.self) private var prefs
     @Environment(ChatStore.self) private var model
 
-    private static let numberFormatter: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.minimum = 1
-        return f
-    }()
-
     var body: some View {
         @Bindable var prefs = prefs
         VStack(alignment: .leading, spacing: 16) {
@@ -1016,7 +1009,7 @@ struct PreferencesView: View {
                 GridRow {
                     Text("Number of lines to keep in log:")
                     HStack(spacing: 8) {
-                        TextField("Lines", value: $prefs.maxLogLines, formatter: Self.numberFormatter)
+                        TextField("Lines", value: $prefs.maxLogLines, format: .number)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
                         Stepper("", value: $prefs.maxLogLines, in: 1...100000)
