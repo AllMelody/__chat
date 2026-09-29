@@ -26,6 +26,7 @@ final class ImageCacheService {
     struct LinkCacheEntry: Codable { let contentType: String; let lastChecked: Date }
     private let linkCacheKey = "LinkCache.v1"
     private var linkCache: [String: LinkCacheEntry] = [:] { didSet { persistLinkCache() } }
+    private var linkCacheSaveTask: Task<Void, any Error>?
     
     init() {
         setupImageCache()
@@ -82,13 +83,17 @@ final class ImageCacheService {
         }
     }
     
+    /// Debounced: bursts of link checks coalesce into one write. Encoding happens on main,
+    /// where linkCache lives, so it can't race with further mutations.
     private func persistLinkCache() {
-        DispatchQueue.global(qos: .utility).async {
-            if let data = try? JSONEncoder().encode(self.linkCache) {
-                DispatchQueue.main.async {
-                    UserDefaults.standard.set(data, forKey: self.linkCacheKey)
-                }
-            }
+        linkCacheSaveTask?.cancel()
+        linkCacheSaveTask = Task { [weak self] in
+            // Task.sleep only throws on cancellation, i.e. when a newer save supersedes this one.
+            try await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            // Strings and Dates always encode; a failure here is a programming error.
+            let data = try! JSONEncoder().encode(self.linkCache)
+            UserDefaults.standard.set(data, forKey: self.linkCacheKey)
         }
     }
     
@@ -126,21 +131,6 @@ final class ImageCacheService {
         // Store in memory cache for next time
         imageCache.setObject(image, forKey: cacheKey as NSString)
         return image
-    }
-    
-    private func cacheImage(_ image: NSImage, for urlString: String) {
-        let cacheKey = cacheKeyForURL(urlString)
-        
-        // Store in memory cache
-        imageCache.setObject(image, forKey: cacheKey as NSString)
-        
-        // Store in disk cache
-        if let tiffData = image.tiffRepresentation,
-           let bitmap = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmap.representation(using: .png, properties: [:]) {
-            let fileURL = imageCacheDirectory.appendingPathComponent("\(cacheKey).cache")
-            try? pngData.write(to: fileURL)
-        }
     }
     
     // MARK: - Thumbnail Processing
@@ -246,29 +236,29 @@ final class ImageCacheService {
         guard let url = URL(string: urlString) else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
-        let task = URLSession.shared.dataTask(with: req) { [weak self] _, resp, error in
-            guard let self else { return }
-            
-            if let error = error {
+        Task { [weak self] in
+            let resp: URLResponse
+            do {
+                (_, resp) = try await URLSession.shared.data(for: req)
+            } catch {
+                // Unreachable links are expected in chat; log and skip the thumbnail.
                 print("HEAD request failed for \(urlString): \(error)")
                 return
             }
-            
+            guard let self else { return }
+
             let ct = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
-            DispatchQueue.main.async {
-                self.linkCache[urlString] = LinkCacheEntry(contentType: ct, lastChecked: Date())
-                if ct.lowercased().hasPrefix("image/") {
-                    var list = self.messageThumbnails[messageID] ?? []
-                    if !list.contains(where: { $0.url == urlString }) {
-                        list.append(MessageThumbnail(url: urlString, image: nil))
-                        self.messageThumbnails[messageID] = list
-                        self.onThumbnailUpdated?(messageID, list)
-                    }
-                    self.fetchImage(urlString: urlString, messageID: messageID)
+            self.linkCache[urlString] = LinkCacheEntry(contentType: ct, lastChecked: Date())
+            if ct.lowercased().hasPrefix("image/") {
+                var list = self.messageThumbnails[messageID] ?? []
+                if !list.contains(where: { $0.url == urlString }) {
+                    list.append(MessageThumbnail(url: urlString, image: nil))
+                    self.messageThumbnails[messageID] = list
+                    self.onThumbnailUpdated?(messageID, list)
                 }
+                self.fetchImage(urlString: urlString, messageID: messageID)
             }
         }
-        task.resume()
     }
     
     /// Fetches an image from `urlString` and stores the result.
@@ -281,45 +271,57 @@ final class ImageCacheService {
         var request = URLRequest(url: url)
         request.timeoutInterval = 30.0
 
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, resp, error in
-            guard let self else { return }
+        let memoryKey = cacheKeyForURL(cacheKey)
+        let fileURL = imageCacheDirectory.appendingPathComponent("\(memoryKey).cache")
 
-            if let error = error {
+        Task { [weak self] in
+            let data: Data
+            do {
+                (data, _) = try await URLSession.shared.data(for: request)
+            } catch {
+                // Unreachable images are expected in chat; log and skip the thumbnail.
                 print("Image fetch failed for \(urlString): \(error)")
                 return
             }
 
-            guard let data = data, !data.isEmpty else { return }
-            guard data.count < 10 * 1024 * 1024 else { return }
+            guard let cg = await Self.makeThumbnail(from: data, cachingPNGAt: fileURL),
+                  let self else { return }
 
-            let cfData = data as CFData
-            guard let src = CGImageSourceCreateWithData(cfData, nil) else { return }
+            let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            self.imageCache.setObject(img, forKey: memoryKey as NSString)
 
-            let maxPixelSize = 600
-            let opts: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
-            ]
-            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return }
-
-            let pixelSize = NSSize(width: cg.width, height: cg.height)
-            let img = NSImage(cgImage: cg, size: pixelSize)
-
-            self.cacheImage(img, for: cacheKey)
-
-            DispatchQueue.main.async {
-                var arr = self.messageThumbnails[messageID] ?? []
-                if let idx = arr.firstIndex(where: { $0.url == cacheKey }) {
-                    arr[idx].image = img
-                } else {
-                    arr.append(MessageThumbnail(url: cacheKey, image: img))
-                }
-                self.messageThumbnails[messageID] = arr
-                self.onThumbnailUpdated?(messageID, arr)
+            var arr = self.messageThumbnails[messageID] ?? []
+            if let idx = arr.firstIndex(where: { $0.url == cacheKey }) {
+                arr[idx].image = img
+            } else {
+                arr.append(MessageThumbnail(url: cacheKey, image: img))
             }
+            self.messageThumbnails[messageID] = arr
+            self.onThumbnailUpdated?(messageID, arr)
         }
-        task.resume()
+    }
+
+    /// Decodes a downscaled thumbnail and writes it to the disk cache, off the main actor.
+    /// Returns a CGImage (Sendable) rather than an NSImage so it can cross back to main.
+    @concurrent
+    private nonisolated static func makeThumbnail(from data: Data, cachingPNGAt fileURL: URL) async -> CGImage? {
+        guard !data.isEmpty, data.count < 10 * 1024 * 1024 else { return nil }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+
+        let maxPixelSize = 600
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+
+        // The disk cache is best-effort (Caches can be purged at any time), so a failed write
+        // only means the thumbnail is re-fetched next launch.
+        if let pngData = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) {
+            try? pngData.write(to: fileURL)
+        }
+        return cg
     }
     
     // Cache the regex detector for performance
