@@ -802,10 +802,10 @@ extension IRCClient : IRCDispatcher {
   }
 
   public func doPing(_ server: String, server2: String? = nil) throws {
-    let msg : IRCMessage
-    
-    msg = IRCMessage(origin: origin, // probably wrong
-                     command: .PONG(server: server, server2: server))
+    // Clients answer by echoing the PING token; server2 is only meaningful for
+    // server-to-server forwarding, so it's intentionally not echoed.
+    let msg = IRCMessage(origin: origin, // probably wrong
+                         command: .PONG(server: server, server2: nil))
     sendMessage(msg)
   }
 }
