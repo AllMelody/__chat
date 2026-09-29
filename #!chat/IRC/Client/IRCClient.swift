@@ -201,6 +201,8 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
                               position: .first)
         }
         #endif
+        try sync.addHandler(ByteToMessageHandler(IRCLineDecoder(),
+                                                 maximumBufferSize: IRCLineDecoder.maximumLineLength))
         try sync.addHandler(IRCChannelHandler(), name: "de.zeezide.nio.irc.protocol")
         try sync.addHandler(Handler(client: me), name: "de.zeezide.nio.irc.client")
       }
