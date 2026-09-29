@@ -153,9 +153,6 @@ nonisolated public extension IRCDispatcher {
           throw IRCDispatcherError.doesNotRespondTo(message)
       }
     }
-    catch {
-      throw error
-    }
   }
 }
 

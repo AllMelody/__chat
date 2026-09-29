@@ -694,7 +694,6 @@ nonisolated extension IRCClient : IRCDispatcher {
     catch let error as IRCDispatcherError {
       guard case .doesNotRespondTo = error else { throw error }
     }
-    catch { throw error }
 
     switch message.command {
       /* Message of the Day coalescing */
