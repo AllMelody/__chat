@@ -20,7 +20,7 @@
  * Maximum length is 9 characters, but clients should support longer for
  * future compat.
  */
-public struct IRCNickName : Hashable, CustomStringConvertible {
+nonisolated public struct IRCNickName : Hashable, CustomStringConvertible, Sendable {
   
   public typealias StringLiteralType = String
   
@@ -102,7 +102,7 @@ public struct IRCNickName : Hashable, CustomStringConvertible {
 
 import struct Foundation.CharacterSet
 
-fileprivate enum CharacterSets {
+nonisolated fileprivate enum CharacterSets {
   static let letter                   = CharacterSet.letters
   static let digit                    = CharacterSet.decimalDigits
   static let special                  = CharacterSet(charactersIn: "[]\\`_^{|}")

@@ -14,10 +14,10 @@
 
 import NIO
 
-public protocol IRCClientMessageTarget : IRCMessageTarget {
+nonisolated public protocol IRCClientMessageTarget : IRCMessageTarget {
 }
 
-public extension IRCClientMessageTarget {
+nonisolated public extension IRCClientMessageTarget {
   
   func send(_ command: IRCCommand) {
     let message = IRCMessage(command: command)

@@ -25,7 +25,7 @@ public typealias IRCParserError = IRCMessageParser.Error
  * The parser is tolerant, if a line fails to parse, it yields an error and
  * continues parsing.
  */
-public struct IRCMessageParser {
+nonisolated public struct IRCMessageParser {
   // Note: IRC does not actually specify an encoding. Lets be ignorant and
   //       consider it UTF8 ;-)
   

@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-extension String {
+nonisolated extension String {
   // You wonder why, admit it! ;-)
   
   @usableFromInline

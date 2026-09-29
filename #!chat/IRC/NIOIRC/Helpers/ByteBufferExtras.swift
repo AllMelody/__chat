@@ -14,7 +14,7 @@
 
 import struct NIO.ByteBuffer
 
-public extension ByteBuffer {
+nonisolated public extension ByteBuffer {
   // This looks expensive, but isn't. As per @weissi String's store up to 15
   // bytes inline, no alloc necessary.
   

@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-public enum IRCMessageRecipient : Hashable {
+nonisolated public enum IRCMessageRecipient : Hashable, Sendable {
   
   case channel (IRCChannelName)
   case nickname(IRCNickName)
@@ -44,7 +44,7 @@ public enum IRCMessageRecipient : Hashable {
   }
 }
 
-public extension IRCMessageRecipient {
+nonisolated public extension IRCMessageRecipient {
   
   @inlinable
   init?(_ s: String) {
@@ -64,7 +64,7 @@ public extension IRCMessageRecipient {
   }
 }
 
-extension IRCMessageRecipient : CustomStringConvertible {
+nonisolated extension IRCMessageRecipient : CustomStringConvertible {
   
   @inlinable
   public var description : String {

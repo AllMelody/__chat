@@ -20,7 +20,7 @@ import Foundation
  * An optional origin, an optional target and the actual command (including its
  * arguments).
  */
-public struct IRCMessage : Codable, CustomStringConvertible {
+nonisolated public struct IRCMessage : Codable, CustomStringConvertible, Sendable {
 
   public enum CodingKeys: String, CodingKey {
     case origin, target, command, arguments, tags
@@ -30,7 +30,10 @@ public struct IRCMessage : Codable, CustomStringConvertible {
   public init(origin: String? = nil, target: String? = nil,
               command: IRCCommand, tags: [String: String]? = nil)
   {
-    self._storage = _Storage(origin: origin, target: target, command: command, tags: tags)
+    self.origin  = origin
+    self.target  = target
+    self.command = command
+    self.tags    = tags
   }
 
   /**
@@ -43,35 +46,19 @@ public struct IRCMessage : Codable, CustomStringConvertible {
    *
    * This is a server name or a nickname w/ user@host parts.
    */
-  @inlinable
-  public var origin : String? {
-    set { copyStorageIfNeeded(); _storage.origin = newValue }
-    get { return _storage.origin }
-  }
-  
-  @inlinable
-  public var target : String? {
-    set { copyStorageIfNeeded(); _storage.target = newValue }
-    get { return _storage.target }
-  }
+  public var origin : String?
+
+  public var target : String?
 
   /**
    * The IRC command and its arguments (max 15).
    */
-  @inlinable
-  public var command : IRCCommand {
-    set { copyStorageIfNeeded(); _storage.command = newValue }
-    get { return _storage.command }
-  }
+  public var command : IRCCommand
 
   /**
    * IRCv3 message tags (e.g., server-time).
    */
-  @inlinable
-  public var tags : [String: String]? {
-    set { copyStorageIfNeeded(); _storage.tags = newValue }
-    get { return _storage.tags }
-  }
+  public var tags : [String: String]?
 
   /**
    * Returns the server-time from tags as a Date, if present.
@@ -98,40 +85,6 @@ public struct IRCMessage : Codable, CustomStringConvertible {
     ms += ">"
     return ms
   }
-  
-  
-  // MARK: - Internal Storage to keep the value small
-  
-  @usableFromInline
-  mutating func copyStorageIfNeeded() {
-    if !isKnownUniquelyReferenced(&_storage) {
-      _storage = _Storage(_storage)
-    }
-  }
-
-  @usableFromInline
-  class _Storage {
-    @usableFromInline var origin  : String?
-    @usableFromInline var target  : String?
-    @usableFromInline var command : IRCCommand
-    @usableFromInline var tags    : [String: String]?
-
-    @usableFromInline
-    init(origin: String?, target: String?, command: IRCCommand, tags: [String: String]? = nil) {
-      self.origin  = origin
-      self.target  = target
-      self.command = command
-      self.tags    = tags
-    }
-    @usableFromInline
-    init(_ other: _Storage) {
-      self.origin  = other.origin
-      self.target  = other.target
-      self.command = other.command
-      self.tags    = other.tags
-    }
-  }
-  @usableFromInline var _storage : _Storage
   
   
   // MARK: - Codable

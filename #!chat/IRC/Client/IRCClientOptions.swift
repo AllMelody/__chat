@@ -15,11 +15,11 @@
 import protocol NIO.EventLoopGroup
 import class    NIO.MultiThreadedEventLoopGroup
 
-fileprivate let onDemandSharedEventLoopGroup =
+nonisolated fileprivate let onDemandSharedEventLoopGroup =
                     MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
 /// Configuration options for the socket connects
-open class ConnectOptions : CustomStringConvertible {
+nonisolated open class ConnectOptions : CustomStringConvertible {
   
   public var eventLoopGroup : EventLoopGroup
   public var hostname       : String?
@@ -50,7 +50,7 @@ open class ConnectOptions : CustomStringConvertible {
 }
 
 /// Configuration options for the IRC client object
-open class IRCClientOptions : ConnectOptions {
+nonisolated open class IRCClientOptions : ConnectOptions {
   
   open var password      : String?
   open var nickname      : IRCNickName

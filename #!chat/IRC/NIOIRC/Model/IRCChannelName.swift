@@ -25,7 +25,7 @@
  * - shall not contain ASCII 7 (^G)
  * - shall not contain a ','
  */
-public struct IRCChannelName : Hashable, CustomStringConvertible {
+nonisolated public struct IRCChannelName : Hashable, CustomStringConvertible, Sendable {
   
   public typealias StringLiteralType = String
   

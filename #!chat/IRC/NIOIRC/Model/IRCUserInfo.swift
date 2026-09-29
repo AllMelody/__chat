@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-public struct IRCUserInfo : Equatable {
+nonisolated public struct IRCUserInfo : Equatable, Sendable {
   
   public let username   : String
   public let usermask   : IRCUserMode?
@@ -50,7 +50,7 @@ public struct IRCUserInfo : Equatable {
   }
 }
 
-extension IRCUserInfo : CustomStringConvertible {
+nonisolated extension IRCUserInfo : CustomStringConvertible {
   
   @inlinable
   public var description : String {

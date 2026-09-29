@@ -635,7 +635,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         return registeredServerIDs.contains(serverID)
     }
     
-    private func formatIRCMessage(_ message: IRCMessage, direction: String) -> String {
+    private nonisolated func formatIRCMessage(_ message: IRCMessage, direction: String) -> String {
         switch message.command {
         case .numeric(let code, let args):
             let argsText = args.joined(separator: " ")
@@ -678,7 +678,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     
     // MARK: - IRCClientDelegate Implementation
     
-    func clientDidDisconnect(_ client: IRCClient) {
+    nonisolated func clientDidDisconnect(_ client: IRCClient) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
 
@@ -720,7 +720,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, registered nick: IRCNickName, with userInfo: IRCUserInfo) {
+    nonisolated func client(_ client: IRCClient, registered nick: IRCNickName, with userInfo: IRCUserInfo) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             self.selfNicks[serverID] = nick.stringValue
@@ -729,21 +729,21 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func clientFailedToRegister(_ client: IRCClient) {
+    nonisolated func clientFailedToRegister(_ client: IRCClient) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             self.delegate?.ircConnectionService(self, serverFailedToRegister: serverID)
         }
     }
 
-    func client(_ client: IRCClient, connectionStateChanged state: IRCClient.ConnectionState) {
+    nonisolated func client(_ client: IRCClient, connectionStateChanged state: IRCClient.ConnectionState) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             self.delegate?.ircConnectionService(self, server: serverID, connectionStateChanged: state)
         }
     }
 
-    func client(_ client: IRCClient, messageOfTheDay: String) {
+    nonisolated func client(_ client: IRCClient, messageOfTheDay: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             let m = ChatMessage(time: Date(), text: "MOTD:\n\(messageOfTheDay)")
@@ -751,7 +751,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, changedNickTo nick: IRCNickName) {
+    nonisolated func client(_ client: IRCClient, changedNickTo nick: IRCNickName) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             self.selfNicks[serverID] = nick.stringValue
@@ -759,7 +759,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, notice message: String, for recipients: [IRCMessageRecipient], serverTime: Date?) {
+    nonisolated func client(_ client: IRCClient, notice message: String, for recipients: [IRCMessageRecipient], serverTime: Date?) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             // Use server-time if available (for ZNC backlog), otherwise use current time
@@ -769,7 +769,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, message: String, from user: IRCUserID, for recipients: [IRCMessageRecipient], serverTime: Date?) {
+    nonisolated func client(_ client: IRCClient, message: String, from user: IRCUserID, for recipients: [IRCMessageRecipient], serverTime: Date?) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             // Use server-time if available (for ZNC backlog), otherwise use current time
@@ -806,7 +806,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, user: IRCUserID, joined channels: [IRCChannelName]) {
+    nonisolated func client(_ client: IRCClient, user: IRCUserID, joined channels: [IRCChannelName]) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
 
@@ -828,7 +828,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, user: IRCUserID, left channels: [IRCChannelName], with msg: String?) {
+    nonisolated func client(_ client: IRCClient, user: IRCUserID, left channels: [IRCChannelName], with msg: String?) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
 
@@ -841,7 +841,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, user: IRCUserID, changedNickTo newNick: IRCNickName) {
+    nonisolated func client(_ client: IRCClient, user: IRCUserID, changedNickTo newNick: IRCNickName) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
 
@@ -852,7 +852,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, userQuit user: IRCUserID, message: String?) {
+    nonisolated func client(_ client: IRCClient, userQuit user: IRCUserID, message: String?) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
 
@@ -862,14 +862,14 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    func client(_ client: IRCClient, changeTopic topic: String, of channel: IRCChannelName) {
+    nonisolated func client(_ client: IRCClient, changeTopic topic: String, of channel: IRCChannelName) {
         DispatchQueue.main.async { [weak self] in
             guard let self, let serverID = self.serverID(for: client) else { return }
             self.delegate?.ircConnectionService(self, didReceiveTopicChange: topic, for: channel.stringValue, on: serverID, changedBy: nil)
         }
     }
 
-    func client(_ client: IRCClient, received message: IRCMessage) {
+    nonisolated func client(_ client: IRCClient, received message: IRCMessage) {
         if debugRawServerLogFlag.load(ordering: .relaxed) {
             let readable = formatIRCMessage(message, direction: "RECV")
             DispatchQueue.main.async { [weak self] in

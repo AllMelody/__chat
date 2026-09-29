@@ -29,7 +29,7 @@ import Foundation
  *       default implementation by calling `irc_defaultMsgSend`. Which contains
  *       the actual dispatcher implementation.
  */
-public protocol IRCDispatcher {
+nonisolated public protocol IRCDispatcher {
   // TODO: Improve this, I don't like anything about this except the dispatcher
   //       name :->
   
@@ -77,7 +77,7 @@ public protocol IRCDispatcher {
   func doQuit      (_ message  : String?) throws
 }
 
-public enum IRCDispatcherError : Swift.Error {
+nonisolated public enum IRCDispatcherError : Swift.Error {
   
   case doesNotRespondTo(IRCMessage)
   
@@ -89,7 +89,7 @@ public enum IRCDispatcherError : Swift.Error {
   case cantChangeModeForOtherUsers
 }
 
-public extension IRCDispatcher {
+nonisolated public extension IRCDispatcher {
 
   @inlinable
   func irc_msgSend(_ message: IRCMessage) throws {
@@ -159,11 +159,11 @@ public extension IRCDispatcher {
   }
 }
 
-fileprivate enum InternalDispatchError : Swift.Error {
+nonisolated fileprivate enum InternalDispatchError : Swift.Error {
   case notImplemented(function: String)
 }
 
-public extension IRCDispatcher {
+nonisolated public extension IRCDispatcher {
   
   func doPing(_ server: String, server2: String?) throws {
     throw InternalDispatchError.notImplemented(function: #function)

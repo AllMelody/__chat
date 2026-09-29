@@ -14,7 +14,7 @@
 
 import Foundation
 
-public extension IRCCommand {
+nonisolated public extension IRCCommand {
   
   /**
    * This initializer creates `IRCCommand` values from String command names and

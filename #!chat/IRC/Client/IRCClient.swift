@@ -35,8 +35,13 @@ import Network
  * - implement and assign an `IRCClientDelegate`, which is going to handle
  *   incoming commands
  * - `connect` the client
+ *
+ * Sendability: connection state is confined to `eventLoop` (public entry
+ * points hop onto it), and `delegate`/`serverID` are only set from main
+ * before connecting. That confinement isn't expressible to the compiler,
+ * hence `@unchecked`.
  */
-open class IRCClient : IRCClientMessageTarget {
+nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
   
   public let options   : IRCClientOptions
   public let eventLoop : EventLoop
@@ -56,7 +61,7 @@ open class IRCClient : IRCClientMessageTarget {
 
   /// Simplified public connection state for external observers.
   /// This hides internal details like CAP negotiation phases.
-  public enum ConnectionState: Equatable, CustomStringConvertible {
+  public enum ConnectionState: Equatable, CustomStringConvertible, Sendable {
     case disconnected
     case connecting
     case connected(nick: String)
@@ -116,7 +121,7 @@ open class IRCClient : IRCClientMessageTarget {
       }
     }
 
-    nonisolated var description : String {
+    var description : String {
       switch self {
         case .disconnected:                   return "disconnected"
         case .connecting:                     return "connecting..."
@@ -638,7 +643,7 @@ open class IRCClient : IRCClientMessageTarget {
   }
 }
 
-extension ChannelOptions {
+nonisolated extension ChannelOptions {
   
   static let reuseAddr =
     ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET),
@@ -646,7 +651,7 @@ extension ChannelOptions {
   
 }
 
-extension IRCCommand {
+nonisolated extension IRCCommand {
   
   var isErrorReply : Bool {
     guard case .numeric(let code, _) = self else { return false }
@@ -670,7 +675,7 @@ extension IRCCommand {
   
 }
 
-extension IRCClient : IRCDispatcher {
+nonisolated extension IRCClient : IRCDispatcher {
 
   public func irc_msgSend(_ message: IRCMessage) throws {
     // Handle NICK and QUIT BEFORE the dispatcher to prevent doNick() being called for other users

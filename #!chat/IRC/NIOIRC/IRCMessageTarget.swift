@@ -23,7 +23,7 @@ import struct NIO.EventLoopPromise
  *
  * Extensions then provide extra functionality based on this, the PoP way.
  */
-public protocol IRCMessageTarget {
+nonisolated public protocol IRCMessageTarget {
   
   var origin : String? { get }
   
@@ -33,7 +33,7 @@ public protocol IRCMessageTarget {
   
 }
 
-public extension IRCMessageTarget {
+nonisolated public extension IRCMessageTarget {
 
   @inlinable
   func sendMessage(_ message: IRCMessage,
@@ -43,7 +43,7 @@ public extension IRCMessageTarget {
   }
 }
 
-public extension IRCMessageTarget {
+nonisolated public extension IRCMessageTarget {
   
   @inlinable
   func sendMessage(_ text: String, to recipients: IRCMessageRecipient...) {

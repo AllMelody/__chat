@@ -14,7 +14,7 @@
 
 import struct Foundation.Data
 
-public enum IRCCommand {
+nonisolated public enum IRCCommand : Sendable {
   
   case NICK(IRCNickName)
   case USER(IRCUserInfo)
@@ -54,7 +54,7 @@ public enum IRCCommand {
   
   // MARK: - IRCv3.net
   
-  public enum CAPSubCommand : String {
+  public enum CAPSubCommand : String, Sendable {
     case LS, LIST, REQ, ACK, NAK, END
     
     @inlinable
@@ -66,7 +66,7 @@ public enum IRCCommand {
 
 // MARK: - Description
 
-extension IRCCommand : CustomStringConvertible {
+nonisolated extension IRCCommand : CustomStringConvertible {
   
   @inlinable
   public var commandAsString : String {

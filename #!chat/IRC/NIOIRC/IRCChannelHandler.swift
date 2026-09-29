@@ -14,7 +14,7 @@
 
 import NIO
 
-public let DefaultIRCPort = 6667
+nonisolated public let DefaultIRCPort = 6667
 
 /**
  * Protocol handler for IRC
@@ -34,7 +34,7 @@ public let DefaultIRCPort = 6667
  *     [':' SOURCE]? ' ' COMMAND [' ' ARGS]? [' :' LAST-ARG]?
  *
  */
-open class IRCChannelHandler : ChannelDuplexHandler {
+nonisolated open class IRCChannelHandler : ChannelDuplexHandler {
 
   public typealias InboundErr  = IRCParserError
   
@@ -259,7 +259,7 @@ open class IRCChannelHandler : ChannelDuplexHandler {
   }
 }
 
-extension ByteBuffer {
+nonisolated extension ByteBuffer {
   
   @usableFromInline
   mutating func writeCSVArgument<T: Sequence>(_ args: T)
