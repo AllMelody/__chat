@@ -62,8 +62,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         self.serverLookup = lookup
     }
 
-    private var sleepObserver: Any?
-    private var wakeObserver: Any?
+    // Typed-notification tokens deregister themselves when released.
+    private var sleepObserver: NotificationCenter.ObservationToken?
+    private var wakeObserver: NotificationCenter.ObservationToken?
 
     init() {
         setupNetworkMonitoring()
@@ -75,8 +76,6 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     deinit {
         clientEvents.continuation.finish()
         pathMonitor.cancel()
-        if let obs = sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
-        if let obs = wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
         // Cancel all connect timeouts
         for task in connectionTimeouts.values {
             task.cancel()
@@ -94,11 +93,11 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     private func setupSleepWakeMonitoring() {
         let center = NSWorkspace.shared.notificationCenter
 
-        sleepObserver = center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+        sleepObserver = center.addObserver(of: NSWorkspace.shared, for: NSWorkspace.WillSleepMessage.self) { [weak self] _ in
             self?.handleSleep()
         }
 
-        wakeObserver = center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+        wakeObserver = center.addObserver(of: NSWorkspace.shared, for: NSWorkspace.DidWakeMessage.self) { [weak self] _ in
             self?.handleWake()
         }
     }
