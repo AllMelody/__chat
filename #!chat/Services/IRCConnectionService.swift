@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import NIO
 import Network
+import Synchronization
 
 /// Threading contract: all mutable state on this type (clients, connectionTimers, pingTasks,
 /// lastPongReceived, selfNicks, registeredServerIDs, messageQueue, queueTimer) and all IRCServer
@@ -41,7 +42,12 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
     /// When true, every received IRC message is echoed to the server log as a "RECV:" line.
     /// Off by default; mirrored from AppPreferences at launch and when toggled.
-    var debugRawServerLog: Bool = false
+    /// Written on main, read on the NIO event loop, so it's backed by an atomic.
+    var debugRawServerLog: Bool {
+        get { debugRawServerLogFlag.load(ordering: .relaxed) }
+        set { debugRawServerLogFlag.store(newValue, ordering: .relaxed) }
+    }
+    private nonisolated let debugRawServerLogFlag = Atomic<Bool>(false)
 
     // Delegate for server updates
     weak var delegate: IRCConnectionServiceDelegate?
@@ -862,7 +868,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
 
     func client(_ client: IRCClient, received message: IRCMessage) {
-        if debugRawServerLog {
+        if debugRawServerLogFlag.load(ordering: .relaxed) {
             let readable = formatIRCMessage(message, direction: "RECV")
             DispatchQueue.main.async { [weak self] in
                 guard let self, let serverID = self.serverID(for: client) else { return }
