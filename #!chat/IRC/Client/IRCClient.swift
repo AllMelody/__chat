@@ -15,7 +15,7 @@
 import Foundation
 import NIO
 #if canImport(NIOSSL)
-@preconcurrency import NIOSSL
+import NIOSSL
 #endif
 #if canImport(Network)
 import Network
@@ -185,44 +185,25 @@ nonisolated open class IRCClient : IRCClientMessageTarget, @unchecked Sendable {
 
     _ = bootstrap.channelOption(ChannelOptions.reuseAddr, value: 1)
     
+    // Handlers are added synchronously on the channel's event loop, which doesn't
+    // require them to be Sendable (NIOSSLClientHandler deliberately isn't).
     _ = bootstrap.channelInitializer { [weak self] channel in
-      var chain: EventLoopFuture<Void> = channel.eventLoop.makeSucceededFuture(())
-      if let me = self, me.options.useTLS {
+      channel.eventLoop.makeCompletedFuture {
+        guard let me = self else { throw Error.internalInconsistency }
+        let sync = channel.pipeline.syncOperations
         #if canImport(NIOSSL)
-        do {
+        if me.options.useTLS {
           var config = TLSConfiguration.makeClientConfiguration()
           config.applicationProtocols = [ "irc", "ircv3", "h2", "http/1.1" ]
-          let context  = try NIOSSLContext(configuration: config)
-          let hostname = me.options.hostname
-          // Note: NIOSSLClientHandler Sendable warning is a swift-nio-ssl library issue
-          // that will be resolved when the library updates for Swift 6
-          let handler  = try NIOSSLClientHandler(context: context,
-                                                 serverHostname: hostname)
-          chain = channel.pipeline.addHandler(handler, position: .first)
-        }
-        catch {
-          let p = channel.eventLoop.makePromise(of: Void.self)
-          p.fail(error)
-          return p.futureResult
+          let context = try NIOSSLContext(configuration: config)
+          try sync.addHandler(NIOSSLClientHandler(context: context,
+                                                  serverHostname: me.options.hostname),
+                              position: .first)
         }
         #endif
+        try sync.addHandler(IRCChannelHandler(), name: "de.zeezide.nio.irc.protocol")
+        try sync.addHandler(Handler(client: me), name: "de.zeezide.nio.irc.client")
       }
-      return chain
-        .flatMap {
-          channel.pipeline
-            .addHandler(IRCChannelHandler(),
-                        name: "de.zeezide.nio.irc.protocol")
-        }
-        .flatMap { [weak self] _ in
-          guard let me = self else {
-            let error = channel.eventLoop.makePromise(of: Void.self)
-            error.fail(Error.internalInconsistency)
-            return error.futureResult
-          }
-          return channel.pipeline
-            .addHandler(Handler(client: me),
-                        name: "de.zeezide.nio.irc.client")
-        }
     }
   }
   deinit {
