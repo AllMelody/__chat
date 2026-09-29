@@ -15,8 +15,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     // Clients and connection state
     var clients: [UUID: IRCClient] = [:]
     var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
-    var pingTasks: [UUID: RepeatedTask] = [:]
-    var lastPongReceived: [UUID: Date] = [:]
+    var pingTasks: [UUID: Task<Void, any Error>] = [:]
+    /// Monotonic, so wall-clock changes (NTP, manual edits) can't fake a dead connection.
+    var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
     private var selfNicks: [UUID: String] = [:]
 
     /// Server IDs for clients that have completed registration. Maintained ENTIRELY on the
@@ -339,17 +340,19 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     func startPingMonitoring(for server: IRCServer) {
         dispatchPrecondition(condition: .onQueue(.main))
         stopPingMonitoring(for: server)
-        lastPongReceived[server.id] = Date()
+        lastPongReceived[server.id] = .now
 
-        guard let client = clients[server.id] else { return }
+        guard clients[server.id] != nil else { return }
 
-        // Use EventLoop.scheduleRepeatedTask for better integration with NIO
-        let task = client.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(60), delay: .seconds(60)) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.checkConnectionHealth(for: server)
+        // Task.sleep only throws on cancellation, which ends the loop.
+        pingTasks[server.id] = Task { [weak self] in
+            while true {
+                try await Task.sleep(for: .seconds(60))
+                try Task.checkCancellation()
+                guard let self else { return }
+                self.checkConnectionHealth(for: server)
             }
         }
-        pingTasks[server.id] = task
     }
 
     func stopPingMonitoring(for server: IRCServer) {
@@ -363,14 +366,13 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         guard server.connectionStatus == .connected,
               let client = clients[server.id] else { return }
         
-        let now = Date()
         if let lastPong = lastPongReceived[server.id],
-           now.timeIntervalSince(lastPong) > 120 {
+           ContinuousClock.now - lastPong > .seconds(120) {
             handleConnectionDead(for: server)
             return
         }
         
-        client.send(.otherCommand("PING", ["\(now.timeIntervalSince1970)"]))
+        client.send(.otherCommand("PING", ["\(Date.now.timeIntervalSince1970)"]))
     }
     
     private func handleConnectionDead(for server: IRCServer) {
@@ -394,7 +396,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
     
     private func updateLastPongReceived(for serverID: UUID) {
-        lastPongReceived[serverID] = Date()
+        lastPongReceived[serverID] = .now
     }
     
     // MARK: - Channel Operations
