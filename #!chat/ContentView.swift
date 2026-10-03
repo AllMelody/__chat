@@ -665,10 +665,18 @@ private struct LogTextView: NSViewRepresentable {
         combined.append(NSAttributedString(string: timeStr, attributes: Self.grayAttributes))
 
         if msg.isPrivmsg, let nick = msg.senderNick {
-            // Chat line: colored nick, gray colon, body in label color
+            // Chat line: colored nick, gray colon, body in label color. An action reads
+            // "* nick waves" instead.
             let isMine = msg.isFromMe || myNick.map { nick.caseInsensitiveCompare($0) == .orderedSame } ?? false
-            combined.append(NSAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes))
-            combined.append(NSAttributedString(string: ": ", attributes: Self.grayAttributes))
+            let nickString = NSAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes)
+            if msg.isAction {
+                combined.append(NSAttributedString(string: "* ", attributes: Self.grayAttributes))
+                combined.append(nickString)
+                combined.append(NSAttributedString(string: " ", attributes: attrs))
+            } else {
+                combined.append(nickString)
+                combined.append(NSAttributedString(string: ": ", attributes: Self.grayAttributes))
+            }
         }
         // Chat body or non-chat line: label color, with links detected
         combined.append(Self.linkified(msg.text, attributes: attrs))
@@ -1076,10 +1084,8 @@ struct JoinChannelView: View {
     @Environment(ChatStore.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
-    private var canJoin: Bool {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        return !trimmed.isEmpty && trimmed.hasPrefix("#")
-    }
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+    private var canJoin: Bool { IRCName.isChannel(trimmedName) }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Join Channel").font(.headline)
@@ -1093,7 +1099,7 @@ struct JoinChannelView: View {
                 Button("Cancel") { dismiss() }
                 Button("Join") {
                     guard canJoin, let server = model.server(withID: model.pendingJoinServerID) else { return }
-                    model.joinChannel(name, on: server)
+                    model.joinChannel(trimmedName, on: server)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

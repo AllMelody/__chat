@@ -71,9 +71,10 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     private func notifyHighlight(for message: ChatMessage, conversation: String, serverName: String, nodeID: UUID) {
         guard Date().timeIntervalSince(message.time) < 60 else { return }
         if NSApp.isActive && selectedNodeID == nodeID { return }
+        let sender = message.senderNick ?? "Someone"
         notificationService.postHighlight(
-            sender: message.senderNick ?? "Someone",
-            text: message.text,
+            sender: sender,
+            text: message.isAction ? "* \(sender) \(message.text)" : message.text,
             conversation: conversation,
             serverName: serverName,
             nodeID: nodeID
@@ -521,6 +522,24 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         } else {
             server.channel(named: channel)?.removeUser(nick)
         }
+    }
+
+    func ircConnectionService(_ service: IRCConnectionService, user nick: String, wasKickedFrom channel: String, by kicker: String?, reason: String?, on serverID: UUID, isSelf: Bool) {
+        guard let server = server(withID: serverID), let channelObj = server.channel(named: channel) else { return }
+
+        let details = (kicker.map { " by \($0)" } ?? "") + (reason.map { " (\($0))" } ?? "")
+        if isSelf {
+            // Keep the channel and its log so the user can read back and /join again.
+            channelObj.joined = false
+            channelObj.users.removeAll()
+            let message = ChatMessage(time: Date(), text: "You were kicked from \(channel)\(details)")
+            channelObj.log.append(message)
+            server.log.append(message)
+        } else {
+            channelObj.removeUser(nick)
+            channelObj.log.append(ChatMessage(time: Date(), text: "\(nick) was kicked\(details)"))
+        }
+        noteLogsChanged()
     }
     
     func ircConnectionService(_ service: IRCConnectionService, didReceiveUserList users: [String], for channel: String, on serverID: UUID) {

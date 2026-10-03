@@ -6,6 +6,9 @@ struct SlashCommandTests {
         ("hello", .text("hello")),                                                  // plain text
         ("/join swift", .join(channel: "#swift", key: nil)),                        // adds '#'
         ("/join #swift hunter2", .join(channel: "#swift", key: "hunter2")),         // keeps '#' and key
+        ("/join &local", .join(channel: "&local", key: nil)),                       // other channel prefixes too
+        ("/me waves at everyone", .me("waves at everyone")),
+        ("/me", .usage("me")),                                                      // action required
         ("/join", .usage("join")),                                                  // missing args
         ("/msg alice hello there world", .msg(target: "alice", message: "hello there world")),
         ("/msg alice", .usage("msg")),                                              // message required

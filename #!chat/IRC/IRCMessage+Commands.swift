@@ -24,6 +24,14 @@ nonisolated extension IRCMessage {
     static func privateMessage(to target: String, _ text: String) -> IRCMessage {
         IRCMessage("PRIVMSG", [target, text])
     }
+    /// `/me <text>`: a CTCP ACTION.
+    static func action(to target: String, _ text: String) -> IRCMessage {
+        .privateMessage(to: target, CTCPMessage(command: "ACTION", parameters: text).text)
+    }
+    /// The answer to a CTCP query. Replies go out as NOTICEs, which are never answered.
+    static func ctcpReply(to target: String, _ reply: CTCPMessage) -> IRCMessage {
+        IRCMessage("NOTICE", [target, reply.text])
+    }
     /// Sets the topic, or with no `topic` asks the server for the current one.
     static func topic(_ channel: String, _ topic: String? = nil) -> IRCMessage {
         IRCMessage("TOPIC", [channel] + (topic.map { [$0] } ?? []))

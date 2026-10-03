@@ -27,19 +27,22 @@ nonisolated enum IRCEvent: Equatable, Sendable {
 
     // MARK: Messages
 
-    /// A PRIVMSG to a channel. `isOwn` marks one we sent from another client sharing our
-    /// bouncer connection, or one in replayed backlog; lines this client sends never come back.
-    case channelMessage(channel: String, sender: String, text: String, isOwn: Bool, time: Date?)
+    /// A PRIVMSG to a channel. `isAction` marks a `/me` (CTCP ACTION), whose `text` is the
+    /// action itself. `isOwn` marks one we sent from another client sharing our bouncer
+    /// connection, or one in replayed backlog; lines this client sends never come back.
+    case channelMessage(channel: String, sender: String, text: String, isAction: Bool = false, isOwn: Bool, time: Date?)
     /// A PRIVMSG in a private conversation with `peer`: the sender of a message to us, or the
     /// recipient of one we sent from another client (`isOwn`, relayed by a bouncer thanks to
     /// znc.in/self-message).
-    case privateMessage(peer: String, sender: String, text: String, isOwn: Bool, time: Date?)
+    case privateMessage(peer: String, sender: String, text: String, isAction: Bool = false, isOwn: Bool, time: Date?)
     case notice(text: String, time: Date?)
 
     // MARK: Channels and users
 
     case joined(channel: String, nick: String, isSelf: Bool)
     case parted(channel: String, nick: String, isSelf: Bool)
+    /// `nick` was removed from `channel` by `kicker` (nil when the server did it).
+    case kicked(channel: String, nick: String, kicker: String?, reason: String?, isSelf: Bool)
     case quit(nick: String, reason: String?)
     /// Someone else changed their nickname. (Ours is `nicknameChanged`.)
     case nickChanged(from: String, to: String)

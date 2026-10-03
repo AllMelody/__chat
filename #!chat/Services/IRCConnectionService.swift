@@ -14,7 +14,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     private var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
 
     // Message send queue (flood protection)
-    private var messageQueue: [(text: String, target: MessageTarget, server: IRCServer)] = []
+    private var messageQueue: [(text: String, isAction: Bool, target: MessageTarget, server: IRCServer)] = []
     private var queueTask: Task<Void, any Error>?
     private let burstLimit = 5
     private let queueInterval: Duration = .milliseconds(500)
@@ -92,7 +92,8 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
 
     /// Full per-server teardown for the "close everything now" paths (sleep, network
-    /// loss): cancel reconnection, ping monitoring and the connect-timeout timer, mark
+    /// loss, a dead or timed-out connection, the connection ending on its own): cancel
+    /// reconnection, ping monitoring and the connect-timeout timer, mark
     /// the model disconnected, close the client, and drop per-server bookkeeping.
     /// One shared checklist so the paths can't drift apart (network loss used to skip
     /// the timers, leaking a live connect-timeout that could double-schedule reconnects).
@@ -251,9 +252,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         }
 
         server.connectionStatus = .connectionTimeout
-
-        // Close the client connection if it exists
-        clients.removeValue(forKey: server.id)?.close()
+        tearDownConnection(for: server.id)
 
         // Attempt reconnection if enabled
         if server.shouldAutoReconnect {
@@ -339,11 +338,8 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         server.connectionStatus = .connectionTimeout
 
         logToServer("Connection to \(server.name) lost", on: server)
+        tearDownConnection(for: server.id)
 
-        clients.removeValue(forKey: server.id)?.close()
-
-        stopPingMonitoring(for: server)
-        
         if server.shouldAutoReconnect {
             scheduleReconnection(for: server)
         }
@@ -423,7 +419,9 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         }
     }
 
-    func sendMessage(_ text: String, to target: MessageTarget, from server: IRCServer) {
+    /// Sends `text` to a channel or private conversation, one line at a time through the flood
+    /// queue; with `asAction`, each line goes out as a `/me` action.
+    func sendMessage(_ text: String, asAction isAction: Bool = false, to target: MessageTarget, from server: IRCServer) {
         dispatchPrecondition(condition: .onQueue(.main))
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -438,11 +436,11 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             // ends up inside an outgoing IRC line. Empty lines are omitted.
             let lines = trimmed.split(whereSeparator: \.isNewline).map(String.init)
             guard !lines.isEmpty else { return }
-            enqueueLines(lines, to: target, from: server)
+            enqueueLines(lines, isAction: isAction, to: target, from: server)
         }
     }
 
-    private func sendSingleLine(_ text: String, to target: MessageTarget, from server: IRCServer) {
+    private func sendSingleLine(_ text: String, isAction: Bool, to target: MessageTarget, from server: IRCServer) {
         guard let client = clients[server.id] else {
             handleSendFailure(for: server, target: target, reason: "Not connected")
             return
@@ -457,36 +455,33 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         // Show our own line right away: the server never sends it back to us, because we
         // don't request IRCv3 echo-message. (znc.in/self-message is something else: it makes
         // a bouncer relay what we send from our *other* clients, which arrives as isOwn.)
+        let nick = server.currentNick ?? defaultNick
+        let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true, isAction: isAction)
+        let recipient: String
         switch target {
         case .channel(let channel):
-            let nick = server.currentNick ?? defaultNick
-            let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true)
             channel.log.append(msg)
-            delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
-            // A failed write ends the connection, which arrives as a .disconnected event.
-            client.send(.privateMessage(to: channel.name, text))
-
+            recipient = channel.name
         case .privateMessage(let pm):
-            let nick = server.currentNick ?? defaultNick
-            let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true)
             pm.log.append(msg)
-            delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
-            client.send(.privateMessage(to: pm.nickname, text))
-
+            recipient = pm.nickname
         case .server:
-            break
+            return
         }
+        delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
+        // A failed write ends the connection, which arrives as a .disconnected event.
+        client.send(isAction ? .action(to: recipient, text) : .privateMessage(to: recipient, text))
     }
 
-    private func enqueueLines(_ lines: [String], to target: MessageTarget, from server: IRCServer) {
+    private func enqueueLines(_ lines: [String], isAction: Bool, to target: MessageTarget, from server: IRCServer) {
         let immediateCount = messageQueue.isEmpty ? min(lines.count, burstLimit) : 0
 
         for line in lines.prefix(immediateCount) {
-            sendSingleLine(line, to: target, from: server)
+            sendSingleLine(line, isAction: isAction, to: target, from: server)
         }
 
         for line in lines.dropFirst(immediateCount) {
-            messageQueue.append((text: line, target: target, server: server))
+            messageQueue.append((text: line, isAction: isAction, target: target, server: server))
         }
 
         if !messageQueue.isEmpty && queueTask == nil {
@@ -512,7 +507,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         }
 
         let item = messageQueue.removeFirst()
-        sendSingleLine(item.text, to: item.target, from: item.server)
+        sendSingleLine(item.text, isAction: item.isAction, to: item.target, from: item.server)
 
         if messageQueue.isEmpty {
             queueTask?.cancel()
@@ -583,14 +578,14 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             lastPongReceived[serverID] = .now
 
         // Server time, when present, dates bouncer backlog to when it was originally sent.
-        case .channelMessage(let channel, let sender, let text, let isOwn, let time):
+        case .channelMessage(let channel, let sender, let text, let isAction, let isOwn, let time):
             let isHighlight = !isOwn && Formatting.mentionsNick(client.nickname, in: text)
-            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight)
+            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight, isAction: isAction)
             delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .channel(channel, isMine: isOwn))
 
-        case .privateMessage(let peer, let sender, let text, let isOwn, let time):
+        case .privateMessage(let peer, let sender, let text, let isAction, let isOwn, let time):
             let isHighlight = !isOwn && Formatting.mentionsNick(client.nickname, in: text)
-            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight)
+            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight, isAction: isAction)
             delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .privateMessage(peer))
 
         case .notice(let text, let time):
@@ -605,6 +600,9 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
         case .parted(let channel, let nick, let isSelf):
             delegate?.ircConnectionService(self, user: nick, leftChannel: channel, on: serverID, isSelf: isSelf)
+
+        case .kicked(let channel, let nick, let kicker, let reason, let isSelf):
+            delegate?.ircConnectionService(self, user: nick, wasKickedFrom: channel, by: kicker, reason: reason, on: serverID, isSelf: isSelf)
 
         case .quit(let nick, let reason):
             delegate?.ircConnectionService(self, userQuit: nick, on: serverID, message: reason)
@@ -669,6 +667,7 @@ protocol IRCConnectionServiceDelegate: AnyObject {
     func ircConnectionService(_ service: IRCConnectionService, didReceiveMessage message: ChatMessage, for serverID: UUID, target: MessageTargetType)
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool)
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, leftChannel channel: String, on serverID: UUID, isSelf: Bool)
+    func ircConnectionService(_ service: IRCConnectionService, user nick: String, wasKickedFrom channel: String, by kicker: String?, reason: String?, on serverID: UUID, isSelf: Bool)
     func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID)
     func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?)
     func ircConnectionService(_ service: IRCConnectionService, didReceiveUserList users: [String], for channel: String, on serverID: UUID)

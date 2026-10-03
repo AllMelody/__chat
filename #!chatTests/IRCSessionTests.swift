@@ -165,6 +165,14 @@ struct IRCSessionTests {
         #expect(session.handle(line(":bob!u@h QUIT")).events == [.quit(nick: "bob", reason: nil)])
     }
 
+    @Test func `Kicks, ours and others'`() {
+        var session = session()
+        #expect(session.handle(line(":op!u@h KICK #swift Alice :behave")).events ==
+                [.kicked(channel: "#swift", nick: "Alice", kicker: "op", reason: "behave", isSelf: true)])
+        #expect(session.handle(line(":op!u@h KICK #swift bob :")).events ==
+                [.kicked(channel: "#swift", nick: "bob", kicker: "op", reason: nil, isSelf: false)])
+    }
+
     @Test func `Topic on join and topic changes`() {
         var session = session()
         #expect(session.handle(line(":srv 332 alice #swift :Swift talk")).events ==
@@ -197,7 +205,7 @@ struct IRCSessionTests {
         #expect(session.handle(line("@time=2011-10-19T16:40:51Z :bob!u@h PRIVMSG #swift :hi alice")).events ==
                 [.channelMessage(channel: "#swift", sender: "bob", text: "hi alice", isOwn: false, time: time)])
         #expect(session.handle(line(":alice!u@h PRIVMSG #swift :\u{1}ACTION waves\u{1}")).events ==
-                [.channelMessage(channel: "#swift", sender: "alice", text: "\u{1}ACTION waves\u{1}", isOwn: true, time: nil)])
+                [.channelMessage(channel: "#swift", sender: "alice", text: "waves", isAction: true, isOwn: true, time: nil)])
     }
 
     @Test func `Private messages are filed under the other person`() {
@@ -228,5 +236,49 @@ struct IRCSessionTests {
                 [.notice(text: "*** Looking up your hostname...", time: nil)])
         #expect(session.handle(line("NOTICE AUTH :*** Processing connection")).events ==
                 [.notice(text: "*** Processing connection", time: nil)])
+    }
+
+    // MARK: - CTCP
+
+    @Test func `Actions in channels and private conversations`() {
+        var session = session()
+        #expect(session.handle(line(":bob!u@h PRIVMSG #swift :\u{1}ACTION waves at alice\u{1}")).events ==
+                [.channelMessage(channel: "#swift", sender: "bob", text: "waves at alice", isAction: true, isOwn: false, time: nil)])
+        #expect(session.handle(line(":bob!u@h PRIVMSG alice :\u{1}ACTION hugs you")).events ==   // no closing \u{1}
+                [.privateMessage(peer: "bob", sender: "bob", text: "hugs you", isAction: true, isOwn: false, time: nil)])
+        // Our own action from another client on the bouncer.
+        #expect(session.handle(line(":alice!u@h PRIVMSG bob :\u{1}ACTION shrugs\u{1}")).events ==
+                [.privateMessage(peer: "bob", sender: "alice", text: "shrugs", isAction: true, isOwn: true, time: nil)])
+    }
+
+    @Test func `Answers VERSION, even when asked in a channel, privately`() {
+        var session = session()
+        for query in [":bob!u@h PRIVMSG alice :\u{1}VERSION\u{1}", ":bob!u@h PRIVMSG #swift :\u{1}VERSION\u{1}"] {
+            #expect(session.handle(line(query)) ==
+                    .init(replies: [IRCMessage("NOTICE", ["bob", "\u{1}VERSION IRC Client\u{1}"])]))
+        }
+    }
+
+    @Test func `Answers PING with the same parameters`() {
+        var session = session()
+        #expect(session.handle(line(":bob!u@h PRIVMSG alice :\u{1}PING 1700000000 42\u{1}")) ==
+                .init(replies: [IRCMessage("NOTICE", ["bob", "\u{1}PING 1700000000 42\u{1}"])]))
+    }
+
+    @Test func `Leaves queries from our own other clients to them`() {
+        var session = session()
+        #expect(session.handle(line(":alice!u@h PRIVMSG bob :\u{1}VERSION\u{1}")) == .init())
+        #expect(session.handle(line(":alice!u@h PRIVMSG bob :\u{1}PING 1\u{1}")) == .init())
+    }
+
+    @Test(arguments: ["TIME", "CLIENTINFO", "DCC SEND file 1 2 3", "FINGER", "SOURCE", "USERINFO", "SOMETHINGELSE"])
+    func `Ignores CTCP the spec doesn't require`(query: String) {
+        var session = session()
+        #expect(session.handle(line(":bob!u@h PRIVMSG alice :\u{1}\(query)\u{1}")) == .init())
+    }
+
+    @Test func `Ignores CTCP replies`() {
+        var session = session()
+        #expect(session.handle(line(":bob!u@h NOTICE alice :\u{1}VERSION Other Client 1.0\u{1}")) == .init())
     }
 }

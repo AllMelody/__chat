@@ -4,7 +4,8 @@ import Foundation
 /// from the server and it returns the replies to send and the events to report.
 ///
 /// It registers (RFC 2812 §3.1) after negotiating IRCv3 capabilities (CAP 302), answers
-/// PINGs, tracks our nickname, and turns server messages into `IRCEvent`s.
+/// PINGs and the mandatory CTCP queries, tracks our nickname, and turns server messages
+/// into `IRCEvent`s.
 nonisolated struct IRCSession {
     /// What handling one message produced.
     struct Output: Equatable {
@@ -89,13 +90,22 @@ nonisolated struct IRCSession {
         case "QUIT":
             guard let sender else { return Output() }
             return Output(events: [.quit(nick: sender, reason: parameters.first)])
+        case "KICK": // KICK <channel> <nick> [:<reason>]
+            guard parameters.count >= 2 else { return Output() }
+            let reason = parameters.count > 2 && !parameters[2].isEmpty ? parameters[2] : nil
+            return Output(events: [.kicked(channel: parameters[0], nick: parameters[1], kicker: sender,
+                                           reason: reason, isSelf: isSelf(parameters[1]))])
 
         case "PRIVMSG":
             guard let sender, parameters.count >= 2 else { return Output() }
+            if let ctcp = CTCPMessage(parsing: parameters[1]) {
+                return handleCTCP(ctcp, from: sender, to: parameters[0], time: message.serverTime)
+            }
             let event = messageEvent(from: sender, to: parameters[0], text: parameters[1], time: message.serverTime)
             return Output(events: [event].compactMap(\.self))
         case "NOTICE":
-            guard parameters.count >= 2 else { return Output() }
+            // A CTCP reply: we never send CTCP queries, so there's nothing to match it to.
+            guard parameters.count >= 2, CTCPMessage(parsing: parameters[1]) == nil else { return Output() }
             return Output(events: [.notice(text: parameters[1], time: message.serverTime)])
 
         case "332": // RPL_TOPIC <nick> <channel> :<topic>
@@ -156,6 +166,29 @@ nonisolated struct IRCSession {
         return [serverTime, selfMessage].compactMap(\.self)
     }
 
+    // MARK: - CTCP
+
+    /// Implements exactly the CTCP messages the spec makes mandatory: shows ACTIONs (`/me`)
+    /// and answers VERSION and PING. Everything else, including what the spec only
+    /// recommends (TIME, CLIENTINFO), is ignored without a reply. Queries a bouncer relays
+    /// from our own other clients aren't ours to answer.
+    private func handleCTCP(_ ctcp: CTCPMessage, from sender: String, to target: String, time: Date?) -> Output {
+        switch ctcp.command {
+        case "ACTION":
+            let event = messageEvent(from: sender, to: target, text: ctcp.parameters ?? "", isAction: true, time: time)
+            return Output(events: [event].compactMap(\.self))
+        case "VERSION" where !isSelf(sender):
+            return Output(replies: [.ctcpReply(to: sender, CTCPMessage(command: "VERSION", parameters: Self.version))])
+        case "PING" where !isSelf(sender):
+            return Output(replies: [.ctcpReply(to: sender, ctcp)])   // the spec wants the parameters back unchanged
+        default:
+            return Output()
+        }
+    }
+
+    /// Our answer to CTCP VERSION.
+    private static let version = "IRC Client"
+
     // MARK: - Helpers
 
     private func isSelf(_ nick: String) -> Bool {
@@ -164,13 +197,13 @@ nonisolated struct IRCSession {
 
     /// Sorts a PRIVMSG into its conversation: a channel, or a private chat with `peer`. A
     /// private message between two other people (which the server never sends) is dropped.
-    private func messageEvent(from sender: String, to target: String, text: String, time: Date?) -> IRCEvent? {
+    private func messageEvent(from sender: String, to target: String, text: String, isAction: Bool = false, time: Date?) -> IRCEvent? {
         if IRCName.isChannel(target) {
-            .channelMessage(channel: target, sender: sender, text: text, isOwn: isSelf(sender), time: time)
+            .channelMessage(channel: target, sender: sender, text: text, isAction: isAction, isOwn: isSelf(sender), time: time)
         } else if isSelf(target) {
-            .privateMessage(peer: sender, sender: sender, text: text, isOwn: false, time: time)
+            .privateMessage(peer: sender, sender: sender, text: text, isAction: isAction, isOwn: false, time: time)
         } else if isSelf(sender) {
-            .privateMessage(peer: target, sender: sender, text: text, isOwn: true, time: time)
+            .privateMessage(peer: target, sender: sender, text: text, isAction: isAction, isOwn: true, time: time)
         } else {
             nil
         }

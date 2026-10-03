@@ -13,6 +13,7 @@ final class MessageRouter {
         case part(target: String?)              // nil = part the currently-selected channel
         case nick(String)
         case msg(target: String, message: String)
+        case me(String)                         // an action: "/me waves" shows as "* nick waves"
         case quit
         case names
         case topic(String?)                     // nil = request the current topic
@@ -33,7 +34,7 @@ final class MessageRouter {
         switch cmd {
         case "join":
             guard let rawCh = parts.first else { return .usage("join") }
-            let name = rawCh.hasPrefix("#") ? rawCh : "#" + rawCh
+            let name = IRCName.isChannel(rawCh) ? rawCh : "#" + rawCh
             return .join(channel: name, key: parts.count >= 2 ? parts[1] : nil)
         case "part":
             return .part(target: parts.first)
@@ -43,6 +44,9 @@ final class MessageRouter {
         case "msg":
             guard parts.count >= 2 else { return .usage("msg") }
             return .msg(target: parts[0], message: parts[1])
+        case "me":
+            guard !parts.isEmpty else { return .usage("me") }
+            return .me(parts.joined(separator: " "))
         case "quit":
             return .quit
         case "names":
@@ -84,8 +88,13 @@ final class MessageRouter {
 
         switch MessageRouter.parse(text) {
         case .text(let body):
-            guard !body.isEmpty else { return }
-            sendMessageToSelection(body, selection: selection, servers: servers, connectionService: connectionService)
+            guard !body.isEmpty, let destination = Self.destination(for: selection, in: servers) else { return }
+            connectionService.sendMessage(body, to: destination.target, from: destination.server)
+
+        case .me(let action):
+            guard let destination = Self.destination(for: selection, in: servers) else { return }
+            if case .server = destination.target { log("Select a channel or private conversation to use /me."); return }
+            connectionService.sendMessage(action, asAction: true, to: destination.target, from: destination.server)
 
         case .join(let name, let key):
             guard let s = serverForSelection(selection) else { log("Select a server to join a channel."); return }
@@ -137,6 +146,7 @@ final class MessageRouter {
             case "join": log("Usage: /join #channel [key]")
             case "nick": log("Usage: /nick newnickname")
             case "msg":  log("Usage: /msg <target> <message>")
+            case "me":   log("Usage: /me <action>")
             default:     log("Usage: /\(cmd)")
             }
 
@@ -145,26 +155,16 @@ final class MessageRouter {
         }
     }
     
-    private func sendMessageToSelection(_ text: String, selection: UUID?, servers: [IRCServer], connectionService: IRCConnectionService) {
-        guard let id = selection else { return }
-        
+    /// Where text typed with `selection` selected goes: a channel, a private conversation,
+    /// or the server log, along with the server it belongs to.
+    private static func destination(for selection: UUID?, in servers: [IRCServer]) -> (server: IRCServer, target: MessageTarget)? {
+        guard let id = selection else { return nil }
         for s in servers {
-            // Handle channel messages
-            if let ch = s.channels.first(where: { $0.id == id }) {
-                connectionService.sendMessage(text, to: .channel(ch), from: s)
-                return
-            }
-            // Handle private messages
-            if let pm = s.privateMessages.first(where: { $0.id == id }) {
-                connectionService.sendMessage(text, to: .privateMessage(pm), from: s)
-                return
-            }
-            // Handle server messages
-            if s.id == id {
-                connectionService.sendMessage(text, to: .server, from: s)
-                return
-            }
+            if let ch = s.channels.first(where: { $0.id == id }) { return (s, .channel(ch)) }
+            if let pm = s.privateMessages.first(where: { $0.id == id }) { return (s, .privateMessage(pm)) }
+            if s.id == id { return (s, .server) }
         }
+        return nil
     }
 }
 
