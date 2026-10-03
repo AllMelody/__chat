@@ -555,6 +555,9 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             delegate?.ircConnectionService(self, serverDidRegister: serverID, as: nick)
 
         case .registrationFailed(let reason):
+            // The server turned us down (bad password, banned, no usable nickname): retrying
+            // can't change its answer, so wait for the user to connect again.
+            serverLookup?(serverID)?.shouldAutoReconnect = false
             registrationDidFail(for: serverID, reason: reason)
 
         case .disconnected(let reason):

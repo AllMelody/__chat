@@ -33,7 +33,7 @@ final class IRCServer: Identifiable {
     var displayAttempt: Int = 0
     /// Whether the app should bring this connection back by itself after a drop, a wake from
     /// sleep, or a network outage. Set when the user (or auto-connect on launch) connects;
-    /// cleared by an explicit disconnect or by running out of retries.
+    /// cleared by an explicit disconnect, a rejected registration, or running out of retries.
     var shouldAutoReconnect: Bool = false
     
     enum ConnectionStatus {
