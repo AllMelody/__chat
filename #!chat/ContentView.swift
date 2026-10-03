@@ -117,7 +117,7 @@ struct ContentView: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                         Spacer()
-                        Button("Add server...") { model.isPresentingAddServer = true }
+                        Button("Add Server…") { model.isPresentingAddServer = true }
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(6)
                     }
@@ -885,12 +885,12 @@ struct ServerRow: View {
         }
         .contextMenu {
             if server.isConnected {
-                Button("Disconnect…", action: disconnect)
+                Button("Disconnect", action: disconnect)
                 Button("Join Channel…", action: joinChannelPrompt)
             } else if isConnecting {
                 Button("Cancel Connection", action: disconnect)
             } else {
-                Button("Connect…", action: connect)
+                Button("Connect", action: connect)
             }
             Divider()
             Button("Edit Server…", action: editServer)

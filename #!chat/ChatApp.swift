@@ -35,7 +35,7 @@ struct ChatApp: App {
                 }
                 
                 CommandMenu("Channel") {
-                    Button("Show Topic...") {
+                    Button("Show Topic…") {
                         model.isPresentingTopicEditor = true
                     }
                     .keyboardShortcut("t", modifiers: [.command])
