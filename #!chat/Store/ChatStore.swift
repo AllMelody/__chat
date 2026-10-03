@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 @Observable
-final class ChatStore: IRCConnectionServiceDelegate {
+final class ChatStore {
     // Services
     private let connectionService = IRCConnectionService()
     private let imageCache = ImageCacheService()
@@ -49,7 +49,12 @@ final class ChatStore: IRCConnectionServiceDelegate {
     }
     
     private func setupServices() {
-        connectionService.delegate = self
+        connectionService.onEvent = { [weak self] event, server in
+            self?.handle(event, on: server)
+        }
+        connectionService.onNetworkAvailable = { [weak self] in
+            self?.reconnectAfterNetworkChange()
+        }
         connectionService.configureServerLookup { [weak self] serverID in
             self?.servers.first { $0.id == serverID }
         }
@@ -353,16 +358,49 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
     }
     
-    // MARK: - IRCConnectionServiceDelegate
-    
-    func ircConnectionService(_ service: IRCConnectionService, didAppendMessage message: ChatMessage, to server: IRCServer) {
-        noteLogsChanged()
-        if message.isPrivmsg {
-            scanMessageForThumbnails(message)
+    // MARK: - Connection Events
+
+    /// Applies one event from the connection service to the model.
+    private func handle(_ event: IRCConnectionService.Event, on server: IRCServer) {
+        switch event {
+        case .logAppended(let message):
+            noteLogsChanged()
+            if message.isPrivmsg {
+                scanMessageForThumbnails(message)
+            }
+        case .messageReceived(let message, let target):
+            receive(message, for: target, on: server)
+        case .registered(let nick):
+            serverDidRegister(server, as: nick)
+        case .registrationFailed(let reason):
+            serverFailedToRegister(server, reason: reason)
+        case .disconnected(let reason):
+            serverDidDisconnect(server, reason: reason)
+        case .nicknameChanged(let nick):
+            serverDidChangeNick(server, to: nick)
+        case .joined(let channel, let nick, let isSelf):
+            userJoined(nick, channel: channel, isSelf: isSelf, on: server)
+        case .parted(let channel, let nick, let isSelf):
+            userLeft(nick, channel: channel, isSelf: isSelf, on: server)
+        case .kicked(let channel, let nick, let kicker, let reason, let isSelf):
+            userKicked(nick, from: channel, by: kicker, reason: reason, isSelf: isSelf, on: server)
+        case .nickChanged(let oldNick, let newNick):
+            userChangedNick(from: oldNick, to: newNick, on: server)
+        case .quit(let nick, let reason):
+            userQuit(nick, reason: reason, on: server)
+        case .topic(let channel, let topic, let setBy):
+            topicChanged(to: topic, in: channel, by: setBy, on: server)
+        case .names(let channelName, let nicks):
+            guard let channel = server.channel(named: channelName) else { return }
+            for nick in nicks where !nick.isEmpty {
+                channel.addUserIfNotPresent(nick)
+            }
+        case .whoReply(let channelName, let nick):
+            server.channel(named: channelName)?.addUserIfNotPresent(nick)
         }
     }
 
-    func ircConnectionServiceNetworkDidBecomeAvailable(_ service: IRCConnectionService) {
+    private func reconnectAfterNetworkChange() {
         // Reconnect the servers that should auto-reconnect and are currently disconnected.
         // (Not .reconnectionFailed: running out of retries clears shouldAutoReconnect.)
         let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout]
@@ -375,9 +413,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID, reason: String) {
-        guard let server = server(withID: serverID) else { return }
-
+    private func serverDidDisconnect(_ server: IRCServer, reason: String) {
         connectionService.cancelConnectionTimeout(for: server)
 
         server.connectionStatus = .connectionTimeout
@@ -388,10 +424,8 @@ final class ChatStore: IRCConnectionServiceDelegate {
             connectionService.scheduleReconnection(for: server)
         }
     }
-    
-    func ircConnectionService(_ service: IRCConnectionService, serverDidRegister serverID: UUID, as nick: String) {
-        guard let server = server(withID: serverID) else { return }
 
+    private func serverDidRegister(_ server: IRCServer, as nick: String) {
         connectionService.cancelConnectionTimeout(for: server)
         server.connectionStatus = .connected
         server.currentNick = nick
@@ -413,10 +447,8 @@ final class ChatStore: IRCConnectionServiceDelegate {
 
         connectionService.startPingMonitoring(for: server)
     }
-    
-    func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID, reason: String) {
-        guard let server = server(withID: serverID) else { return }
 
+    private func serverFailedToRegister(_ server: IRCServer, reason: String) {
         connectionService.cancelConnectionTimeout(for: server)
 
         server.log.append(ChatMessage(time: Date(), text: "Failed to register with server (\(reason))"))
@@ -427,9 +459,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, serverDidChangeNick serverID: UUID, to nick: String) {
-        guard let server = server(withID: serverID) else { return }
-
+    private func serverDidChangeNick(_ server: IRCServer, to nick: String) {
         // Our own entry in the member lists follows the rename too.
         if let oldNick = server.currentNick {
             for channel in server.channels {
@@ -440,10 +470,8 @@ final class ChatStore: IRCConnectionServiceDelegate {
         server.log.append(ChatMessage(time: Date(), text: "You are now known as \(nick)"))
         noteLogsChanged()
     }
-    
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveMessage message: ChatMessage, for serverID: UUID, target: MessageTargetType) {
-        guard let server = server(withID: serverID) else { return }
 
+    private func receive(_ message: ChatMessage, for target: MessageTargetType, on server: IRCServer) {
         switch target {
         case .server:
             server.log.append(message)
@@ -477,10 +505,8 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
         noteLogsChanged()
     }
-    
-    func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool) {
-        guard let server = server(withID: serverID) else { return }
 
+    private func userJoined(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {
         let channelObj = server.getOrCreateChannel(named: channel)
         channelObj.addUserIfNotPresent(nick)
 
@@ -493,9 +519,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, user nick: String, leftChannel channel: String, on serverID: UUID, isSelf: Bool) {
-        guard let server = server(withID: serverID) else { return }
-
+    private func userLeft(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {
         if isSelf {
             if let channelObj = server.channel(named: channel) {
                 // Channel is removed below; release the thumbnail state its log was holding.
@@ -509,8 +533,8 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, user nick: String, wasKickedFrom channel: String, by kicker: String?, reason: String?, on serverID: UUID, isSelf: Bool) {
-        guard let server = server(withID: serverID), let channelObj = server.channel(named: channel) else { return }
+    private func userKicked(_ nick: String, from channel: String, by kicker: String?, reason: String?, isSelf: Bool, on server: IRCServer) {
+        guard let channelObj = server.channel(named: channel) else { return }
 
         let details = (kicker.map { " by \($0)" } ?? "") + (reason.map { " (\($0))" } ?? "")
         if isSelf {
@@ -526,22 +550,9 @@ final class ChatStore: IRCConnectionServiceDelegate {
         }
         noteLogsChanged()
     }
-    
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveUserList users: [String], for channel: String, on serverID: UUID) {
-        guard let channelObj = server(withID: serverID)?.channel(named: channel) else { return }
 
-        // Add each user if not already present (using case-insensitive check)
-        for nick in users where !nick.isEmpty {
-            channelObj.addUserIfNotPresent(nick)
-        }
-    }
-
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveWhoReply nick: String, for channel: String, on serverID: UUID) {
-        server(withID: serverID)?.channel(named: channel)?.addUserIfNotPresent(nick)
-    }
-
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveTopicChange topic: String, for channel: String, on serverID: UUID, changedBy nick: String?) {
-        guard let channelObj = server(withID: serverID)?.channel(named: channel) else { return }
+    private func topicChanged(to topic: String, in channel: String, by nick: String?, on server: IRCServer) {
+        guard let channelObj = server.channel(named: channel) else { return }
 
         channelObj.topic = topic.isEmpty ? nil : topic
         let logText = nick.map { "\($0) changed the topic to: \(topic)" } ?? "Topic: \(topic)"
@@ -549,9 +560,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
         noteLogsChanged()
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID) {
-        guard let server = server(withID: serverID) else { return }
-
+    private func userChangedNick(from oldNick: String, to newNick: String, on server: IRCServer) {
         let nickMessage = ChatMessage(time: Date(), text: "\(oldNick) is now known as \(newNick)")
 
         // Update nick in channels and log where the user is present
@@ -572,10 +581,8 @@ final class ChatStore: IRCConnectionServiceDelegate {
         noteLogsChanged()
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?) {
-        guard let server = server(withID: serverID) else { return }
-
-        let quitText = message.map { " (\($0))" } ?? ""
+    private func userQuit(_ nick: String, reason: String?, on server: IRCServer) {
+        let quitText = reason.map { " (\($0))" } ?? ""
         let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")
 
         for channel in server.channels {

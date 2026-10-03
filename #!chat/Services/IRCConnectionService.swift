@@ -2,10 +2,47 @@ import AppKit
 import Foundation
 import Network
 
-/// Owns one IRCClient per connected server and turns their events into model updates.
-/// Everything here, including IRCClient's events and all IRCServer model mutation, runs on
-/// the main actor.
+/// Owns one IRCClient per connected server, and reports what happens on each to its owner
+/// as `Event`s. Everything here, including IRCClient's events and all IRCServer model
+/// mutation, runs on the main actor.
 final class IRCConnectionService: ReconnectionManagerDelegate {
+    /// What the service reports about one of its servers.
+    enum Event {
+        /// A line was added to one of the server's logs: a message we sent, a status line, or
+        /// a failure to send.
+        case logAppended(ChatMessage)
+        /// A line arrived for the server log, a channel, or a private conversation.
+        case messageReceived(ChatMessage, MessageTargetType)
+        /// The server accepted us under `nick`.
+        case registered(nick: String)
+        /// The connection ended before registration completed: it was refused, cut off, or
+        /// turned down by the server.
+        case registrationFailed(reason: String)
+        /// A registered connection ended.
+        case disconnected(reason: String)
+        /// Our own nickname changed.
+        case nicknameChanged(String)
+        case joined(channel: String, nick: String, isSelf: Bool)
+        case parted(channel: String, nick: String, isSelf: Bool)
+        /// `nick` was removed from `channel` by `kicker` (nil when the server did it).
+        case kicked(channel: String, nick: String, kicker: String?, reason: String?, isSelf: Bool)
+        /// Someone else changed their nickname. (Ours is `nicknameChanged`.)
+        case nickChanged(from: String, to: String)
+        case quit(nick: String, reason: String?)
+        /// The channel topic: the current one when joining (`setBy` nil), or a change.
+        case topic(channel: String, topic: String, setBy: String?)
+        /// A batch of channel members, without their status prefixes.
+        case names(channel: String, nicks: [String])
+        /// One channel member from a WHO reply.
+        case whoReply(channel: String, nick: String)
+    }
+
+    /// Receives every event, in order, with the server it concerns.
+    var onEvent: (Event, IRCServer) -> Void = { _, _ in }
+    /// Called after a wake from sleep, or when the network returns after an outage: the time
+    /// to reconnect servers that should be connected.
+    var onNetworkAvailable: () -> Void = {}
+
     // Clients and connection state
     private(set) var clients: [UUID: IRCClient] = [:]
     private var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
@@ -39,9 +76,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     /// When true, every line received from a server is echoed to its server log as a "RECV:"
     /// line. Off by default; mirrored from AppPreferences at launch and when toggled.
     var debugRawServerLog = false
-
-    // Delegate for server updates
-    weak var delegate: IRCConnectionServiceDelegate?
 
     // Server lookup for reconnection callbacks
     private var serverLookup: ((UUID) -> IRCServer?)?
@@ -133,7 +167,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
     private func handleWake() {
         // After waking, reconnect all servers that should auto-reconnect.
-        delegate?.ircConnectionServiceNetworkDidBecomeAvailable(self)
+        onNetworkAvailable()
     }
 
     // MARK: - Network Monitoring
@@ -172,7 +206,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
 
     private func handleNetworkRestored() {
-        delegate?.ircConnectionServiceNetworkDidBecomeAvailable(self)
+        onNetworkAvailable()
     }
 
     // MARK: - Connection Management
@@ -464,7 +498,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         case .server:
             return
         }
-        delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
+        onEvent(.logAppended(msg), server)
         // A failed write ends the connection, which arrives as a .disconnected event.
         client.send(isAction ? .action(to: recipient, text) : .privateMessage(to: recipient, text))
     }
@@ -511,12 +545,12 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         }
     }
 
-    /// Appends a status line to the server log and notifies the delegate — the shared
+    /// Appends a status line to the server log and reports it — the shared
     /// tail of every "something happened on this connection" message.
     private func logToServer(_ text: String, on server: IRCServer) {
         let msg = ChatMessage(time: Date(), text: text)
         server.log.append(msg)
-        delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
+        onEvent(.logAppended(msg), server)
     }
 
     private func handleSendFailure(for server: IRCServer, target: MessageTarget? = nil, reason: String) {
@@ -532,7 +566,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             server.log.append(msg)
         }
 
-        delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
+        onEvent(.logAppended(msg), server)
     }
     
     // MARK: - Helper Methods
@@ -552,7 +586,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             if debugRawServerLog { logServerEvent("RECV: \(line)", for: serverID) }
 
         case .registered(let nick):
-            delegate?.ircConnectionService(self, serverDidRegister: serverID, as: nick)
+            report(.registered(nick: nick), for: serverID)
 
         case .registrationFailed(let reason):
             // The server turned us down (bad password, banned, no usable nickname): retrying
@@ -568,7 +602,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             }
 
         case .nicknameChanged(let nick):
-            delegate?.ircConnectionService(self, serverDidChangeNick: serverID, to: nick)
+            report(.nicknameChanged(nick), for: serverID)
 
         case .messageOfTheDay(let text):
             logServerEvent("MOTD:\n\(text)", for: serverID)
@@ -584,43 +618,42 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         // Server time, when present, dates bouncer backlog to when it was originally sent.
         case .channelMessage(let channel, let message):
             let statusTarget = message.statusPrefix.map { "\($0)\(channel)" }
-            delegate?.ircConnectionService(self, didReceiveMessage: chatMessage(message, statusTarget: statusTarget, nickname: client.nickname),
-                                           for: serverID, target: .channel(channel))
+            report(.messageReceived(chatMessage(message, statusTarget: statusTarget, nickname: client.nickname), .channel(channel)),
+                   for: serverID)
 
         case .privateMessage(let peer, let message):
-            delegate?.ircConnectionService(self, didReceiveMessage: chatMessage(message, nickname: client.nickname),
-                                           for: serverID, target: .privateMessage(peer))
+            report(.messageReceived(chatMessage(message, nickname: client.nickname), .privateMessage(peer)), for: serverID)
 
         case .notice(let text, let time):
             logServerEvent("NOTICE: \(text)", time: time, for: serverID)
 
         case .joined(let channel, let nick, let isSelf):
-            delegate?.ircConnectionService(self, user: nick, joinedChannel: channel, on: serverID, isSelf: isSelf)
+            report(.joined(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
             if isSelf {
                 client.send(.names(channel))
                 client.send(.who(channel))
             }
 
         case .parted(let channel, let nick, let isSelf):
-            delegate?.ircConnectionService(self, user: nick, leftChannel: channel, on: serverID, isSelf: isSelf)
+            report(.parted(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
 
         case .kicked(let channel, let nick, let kicker, let reason, let isSelf):
-            delegate?.ircConnectionService(self, user: nick, wasKickedFrom: channel, by: kicker, reason: reason, on: serverID, isSelf: isSelf)
+            report(.kicked(channel: channel, nick: nick, kicker: kicker, reason: reason, isSelf: isSelf), for: serverID)
 
         case .quit(let nick, let reason):
-            delegate?.ircConnectionService(self, userQuit: nick, on: serverID, message: reason)
+            report(.quit(nick: nick, reason: reason), for: serverID)
 
         case .nickChanged(let oldNick, let newNick):
-            delegate?.ircConnectionService(self, user: oldNick, changedNickTo: newNick, on: serverID)
+            report(.nickChanged(from: oldNick, to: newNick), for: serverID)
 
         case .topic(let channel, let topic, let setBy):
-            delegate?.ircConnectionService(self, didReceiveTopicChange: topic, for: channel, on: serverID, changedBy: setBy)
+            report(.topic(channel: channel, topic: topic, setBy: setBy), for: serverID)
 
         case .names(let channel, let nicks):
-            delegate?.ircConnectionService(self, didReceiveUserList: nicks, for: channel, on: serverID)
+            report(.names(channel: channel, nicks: nicks), for: serverID)
 
         case .whoReply(let channel, let nick):
-            delegate?.ircConnectionService(self, didReceiveWhoReply: nick, for: channel, on: serverID)
+            report(.whoReply(channel: channel, nick: nick), for: serverID)
         }
     }
 
@@ -635,22 +668,28 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     /// A server-log line reporting something the server said.
     private func logServerEvent(_ text: String, time: Date? = nil, for serverID: UUID) {
         let message = ChatMessage(time: time ?? Date(), text: text)
-        delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .server)
+        report(.messageReceived(message, .server), for: serverID)
     }
 
-    /// A registered connection ended: tidy up, and let the delegate decide about reconnecting.
+    /// Reports `event` for the server with `serverID`, unless the server is gone.
+    private func report(_ event: Event, for serverID: UUID) {
+        guard let server = serverLookup?(serverID) else { return }
+        onEvent(event, server)
+    }
+
+    /// A registered connection ended: tidy up, and let the owner decide about reconnecting.
     private func connectionDidEnd(for serverID: UUID, reason: String) {
         tearDownConnection(for: serverID)
         messageQueue.removeAll { $0.server.id == serverID }
         if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
-        delegate?.ircConnectionService(self, serverDidDisconnect: serverID, reason: reason)
+        report(.disconnected(reason: reason), for: serverID)
     }
 
     /// The connection ended before registration completed: it was refused, cut off, or
     /// turned down by the server.
     private func registrationDidFail(for serverID: UUID, reason: String) {
         tearDownConnection(for: serverID)
-        delegate?.ircConnectionService(self, serverFailedToRegister: serverID, reason: reason)
+        report(.registrationFailed(reason: reason), for: serverID)
     }
 }
 
@@ -666,22 +705,4 @@ enum MessageTargetType {
     case server
     case channel(String)
     case privateMessage(String)
-}
-
-protocol IRCConnectionServiceDelegate: AnyObject {
-    func ircConnectionService(_ service: IRCConnectionService, didAppendMessage message: ChatMessage, to server: IRCServer)
-    func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID, reason: String)
-    func ircConnectionServiceNetworkDidBecomeAvailable(_ service: IRCConnectionService)
-    func ircConnectionService(_ service: IRCConnectionService, serverDidRegister serverID: UUID, as nick: String)
-    func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID, reason: String)
-    func ircConnectionService(_ service: IRCConnectionService, serverDidChangeNick serverID: UUID, to nick: String)
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveMessage message: ChatMessage, for serverID: UUID, target: MessageTargetType)
-    func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool)
-    func ircConnectionService(_ service: IRCConnectionService, user nick: String, leftChannel channel: String, on serverID: UUID, isSelf: Bool)
-    func ircConnectionService(_ service: IRCConnectionService, user nick: String, wasKickedFrom channel: String, by kicker: String?, reason: String?, on serverID: UUID, isSelf: Bool)
-    func ircConnectionService(_ service: IRCConnectionService, user oldNick: String, changedNickTo newNick: String, on serverID: UUID)
-    func ircConnectionService(_ service: IRCConnectionService, userQuit nick: String, on serverID: UUID, message: String?)
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveUserList users: [String], for channel: String, on serverID: UUID)
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveWhoReply nick: String, for channel: String, on serverID: UUID)
-    func ircConnectionService(_ service: IRCConnectionService, didReceiveTopicChange topic: String, for channel: String, on serverID: UUID, changedBy nick: String?)
 }
