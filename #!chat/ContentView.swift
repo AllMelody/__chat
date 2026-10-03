@@ -391,6 +391,9 @@ private struct LogTextView: NSViewRepresentable {
         // thumbnail fingerprint of each, so apply() can choose append-fast-path vs full rebuild.
         var lastRenderedIDs: [UUID] = []
         var renderedThumbFingerprints: [UUID: Int] = [:]
+        /// Start of the day the storage was last fully rendered on. Timestamps leave the date
+        /// off for "today", so once the day turns every line needs re-rendering.
+        var renderedDay: Date?
 
         deinit {
             if let observer = boundsObserver {
@@ -502,8 +505,9 @@ private struct LogTextView: NSViewRepresentable {
             return hash
         }()
         let selectionChanged = (context.coordinator.lastSelectionToken != selectionToken)
-        if context.coordinator.lastContentSignature != signature {
-            apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: selectionChanged)
+        let dayChanged = (context.coordinator.renderedDay != Calendar.current.startOfDay(for: .now))
+        if context.coordinator.lastContentSignature != signature || dayChanged {
+            apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: selectionChanged || dayChanged)
             context.coordinator.lastContentSignature = signature
         }
 
@@ -623,6 +627,7 @@ private struct LogTextView: NSViewRepresentable {
                 }
             }
             storage.setAttributedString(combined)
+            coordinator.renderedDay = Calendar.current.startOfDay(for: .now)
         }
 
         // Single bookkeeping exit point keeps the next diff accurate.
