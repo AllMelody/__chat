@@ -24,9 +24,10 @@ nonisolated final class IRCConnection: Sendable {
     /// the caller decides how long that may take. A rejected TLS handshake won't fix itself
     /// by retrying, so it fails right away.
     func open() async throws {
-        let states = AsyncStream(NWConnection.State.self) { continuation in
-            connection.stateUpdateHandler = { continuation.yield($0) }
-        }
+        let (states, continuation) = AsyncStream.makeStream(of: NWConnection.State.self)
+        connection.stateUpdateHandler = { continuation.yield($0) }
+        // Nothing listens once this returns; later states are dropped rather than buffered.
+        defer { continuation.finish() }
         connection.start(queue: queue)
         for await state in states {
             switch state {
