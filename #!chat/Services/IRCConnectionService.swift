@@ -14,10 +14,18 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     private var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
 
     // Message send queue (flood protection)
-    private var messageQueue: [(text: String, isAction: Bool, target: MessageTarget, server: IRCServer)] = []
+    private var messageQueue: [QueuedLine] = []
     private var queueTask: Task<Void, any Error>?
     private let burstLimit = 5
     private let queueInterval: Duration = .milliseconds(500)
+
+    /// A line waiting its turn in the flood-protection queue.
+    private struct QueuedLine {
+        var text: String
+        var isAction: Bool
+        var target: MessageTarget
+        var server: IRCServer
+    }
 
     // Reconnection handling
     private let reconnectionManager = ReconnectionManager()
@@ -469,7 +477,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         }
 
         for line in lines.dropFirst(immediateCount) {
-            messageQueue.append((text: line, isAction: isAction, target: target, server: server))
+            messageQueue.append(QueuedLine(text: line, isAction: isAction, target: target, server: server))
         }
 
         if !messageQueue.isEmpty && queueTask == nil {
