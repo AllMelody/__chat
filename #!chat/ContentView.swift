@@ -56,7 +56,7 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $model.isPresentingTopicEditor) {
-                if let channel = findChannel(id: model.selectedNodeID) {
+                if let channel = model.selectedItem?.channel {
                     TopicEditorView(channel: channel)
                 }
             }
@@ -71,7 +71,7 @@ struct ContentView: View {
     // MARK: - Left Pane
     private var leftPane: some View {
         VStack(spacing: 0) {
-            if let topic = findChannel(id: model.selectedNodeID)?.topic {
+            if let topic = model.selectedItem?.channel?.topic {
                 Text(topic)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -91,7 +91,7 @@ struct ContentView: View {
 
             Divider()
             ComposerTextField(text: $draft, placeholder: "Type a message…", focusRequest: composerFocusRequest) {
-                if canSendMessage { sendMessage() }
+                if model.canSendToSelection { sendMessage() }
             }
             .padding(.leading, 6)
             .padding(.trailing, 4)
@@ -149,7 +149,7 @@ struct ContentView: View {
                         )
                         separator()
                         ForEach(server.channels) { ch in
-                            let node = SidebarItem(kind: .channel(ch))
+                            let node = SidebarItem(server: server, kind: .channel(ch))
                             ConversationRow(
                                 node: node,
                                 unreadCount: ch.unreadCount,
@@ -169,7 +169,7 @@ struct ContentView: View {
                             if ch.id != server.channels.last?.id || !server.privateMessages.isEmpty { separator() }
                         }
                         ForEach(server.privateMessages) { pm in
-                            let node = SidebarItem(kind: .privateMessage(pm))
+                            let node = SidebarItem(server: server, kind: .privateMessage(pm))
                             ConversationRow(
                                 node: node,
                                 unreadCount: pm.unreadCount,
@@ -201,30 +201,14 @@ struct ContentView: View {
 
     // MARK: - Data accessors
     private var selectedServer: IRCServer? { model.server(withID: model.selectedNodeID) }
-    private var canSendMessage: Bool {
-        // Use the ChatStore method that checks actual client availability
-        model.canSendMessage(to: model.selectedNodeID)
-    }
-    private func findChannel(id: UUID?) -> IRCChannel? {
-        guard let id else { return nil }
-        return model.servers.lazy.flatMap(\.channels).first { $0.id == id }
-    }
-    private func findPrivateMessage(id: UUID?) -> IRCPrivateMessage? {
-        guard let id else { return nil }
-        return model.servers.lazy.flatMap(\.privateMessages).first { $0.id == id }
-    }
     private var currentMessages: [ChatMessage] {
-        let all = findChannel(id: model.selectedNodeID)?.log
-            ?? findPrivateMessage(id: model.selectedNodeID)?.log
-            ?? selectedServer?.log
-            ?? []
-        return Array(all.suffix(max(1, prefs.maxLogLines)))
+        Array((model.selectedItem?.log ?? []).suffix(max(1, prefs.maxLogLines)))
     }
     private var currentUsers: [String] {
-        (findChannel(id: model.selectedNodeID)?.users ?? []).sorted(using: .localizedStandard)
+        (model.selectedItem?.channel?.users ?? []).sorted(using: .localizedStandard)
     }
     private func sendMessage() {
-        model.handleInputFromComposer(draft, selection: model.selectedNodeID)
+        model.handleInputFromComposer(draft)
         draft = ""
     }
 }
@@ -884,7 +868,7 @@ struct ServerRow: View {
     }
     
     var body: some View {
-        let node = SidebarItem(kind: .server(server))
+        let node = SidebarItem(server: server, kind: .server)
         SidebarRowBase(isSelected: isSelected, indent: 0, rowHeight: rowHeight, activeState: activeState) {
             Image(systemName: node.systemImageName)
                 .frame(width: iconColWidth, alignment: .center)
@@ -949,20 +933,23 @@ struct ConversationRow: View {
     }
 }
 
+/// A sidebar row: a server, or one of its channels or private conversations.
 struct SidebarItem: Identifiable {
-    enum Kind { case server(IRCServer), channel(IRCChannel), privateMessage(IRCPrivateMessage) }
+    enum Kind { case server, channel(IRCChannel), privateMessage(IRCPrivateMessage) }
+    /// The server this row is, or belongs to.
+    let server: IRCServer
     let kind: Kind
 
     var id: UUID {
-        switch kind { 
-        case .server(let s): s.id
+        switch kind {
+        case .server: server.id
         case .channel(let c): c.id
         case .privateMessage(let pm): pm.id
         }
     }
     var name: String {
-        switch kind { 
-        case .server(let s): s.name
+        switch kind {
+        case .server: server.name
         case .channel(let c): c.name
         case .privateMessage(let pm): pm.nickname
         }
@@ -971,13 +958,34 @@ struct SidebarItem: Identifiable {
         switch kind {
         case .channel: "rectangle.3.group.bubble"
         case .privateMessage: "person.2"
-        case .server(let s):
-            switch s.connectionStatus {
+        case .server:
+            switch server.connectionStatus {
             case .connected: "network"
             case .connecting: "network.badge.shield.half.filled"
             case .reconnecting: "arrow.clockwise.circle"
             case .connectionTimeout, .reconnectionFailed, .disconnected: "network.slash"
             }
+        }
+    }
+    /// The row's channel, when it is one.
+    var channel: IRCChannel? {
+        guard case .channel(let channel) = kind else { return nil }
+        return channel
+    }
+    /// The log shown while the row is selected.
+    var log: [ChatMessage] {
+        switch kind {
+        case .server: server.log
+        case .channel(let c): c.log
+        case .privateMessage(let pm): pm.log
+        }
+    }
+    /// Where text typed while the row is selected goes.
+    var messageTarget: MessageTarget {
+        switch kind {
+        case .server: .server
+        case .channel(let c): .channel(c)
+        case .privateMessage(let pm): .privateMessage(pm)
         }
     }
 }

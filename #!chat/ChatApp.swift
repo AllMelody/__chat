@@ -15,11 +15,6 @@ struct ChatApp: App {
         _model = State(initialValue: model)
     }
 
-    private var isChannelSelected: Bool {
-        guard let id = model.selectedNodeID else { return false }
-        return model.servers.contains { $0.channels.contains { $0.id == id } }
-    }
-
     var body: some Scene {
         WindowGroup { ContentView() }
             .environment(model)
@@ -44,7 +39,7 @@ struct ChatApp: App {
                         model.isPresentingTopicEditor = true
                     }
                     .keyboardShortcut("t", modifiers: [.command])
-                    .disabled(!isChannelSelected)
+                    .disabled(model.selectedItem?.channel == nil)
                 }
 
                 CommandMenu("Navigation") {

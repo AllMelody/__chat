@@ -201,10 +201,16 @@ final class ChatStore: IRCConnectionServiceDelegate {
     /// Every sidebar row in display order: each server followed by its channels and PMs.
     var sidebarItems: [SidebarItem] {
         servers.flatMap { s in
-            [SidebarItem(kind: .server(s))] +
-            s.channels.map { SidebarItem(kind: .channel($0)) } +
-            s.privateMessages.map { SidebarItem(kind: .privateMessage($0)) }
+            [SidebarItem(server: s, kind: .server)] +
+            s.channels.map { SidebarItem(server: s, kind: .channel($0)) } +
+            s.privateMessages.map { SidebarItem(server: s, kind: .privateMessage($0)) }
         }
+    }
+
+    /// The selected sidebar row, unless what it showed has gone away.
+    var selectedItem: SidebarItem? {
+        guard let id = selectedNodeID else { return nil }
+        return sidebarItems.first { $0.id == id }
     }
 
     /// Selects a sidebar row. Entering a conversation counts as reading it, so its
@@ -230,40 +236,19 @@ final class ChatStore: IRCConnectionServiceDelegate {
         select(all[(currentIndex + offset + all.count) % all.count])
     }
 
-    /// Returns the server for a given selection (server ID, channel ID, or PM ID)
-    func serverForSelection(_ selectionID: UUID?) -> IRCServer? {
-        guard let id = selectionID else { return nil }
-        // Direct server selection
-        if let server = servers.first(where: { $0.id == id }) {
-            return server
-        }
-        // Channel or PM selection - find parent server
-        for server in servers {
-            if server.channels.contains(where: { $0.id == id }) ||
-               server.privateMessages.contains(where: { $0.id == id }) {
-                return server
-            }
-        }
-        return nil
-    }
-
-    /// Check if we can actually send messages to the given selection.
+    /// Whether the composer can send to the selection right now.
     /// This checks connection status, client state, and channel join confirmation.
-    func canSendMessage(to selectionID: UUID?) -> Bool {
-        guard let server = serverForSelection(selectionID) else { return false }
+    var canSendToSelection: Bool {
+        guard let item = selectedItem else { return false }
 
         // First check the observable status - this is the source of truth for UI state
-        guard server.connectionStatus == .connected else { return false }
+        guard item.server.connectionStatus == .connected else { return false }
 
         // Then verify the server is fully registered.
-        guard connectionService.isRegistered(server.id) else { return false }
+        guard connectionService.isRegistered(item.server.id) else { return false }
 
         // If a channel is selected, only allow sending after the server confirmed our JOIN
-        if let channel = server.channels.first(where: { $0.id == selectionID }) {
-            return channel.joined
-        }
-
-        return true
+        return item.channel?.joined ?? true
     }
 
     // MARK: - Log Trimming
@@ -608,26 +593,19 @@ final class ChatStore: IRCConnectionServiceDelegate {
 // MARK: - Composer Commands
 
 extension ChatStore {
-    /// Carries out a line typed into the composer with `selection` selected: text goes to the
-    /// selected conversation, and slash commands act on the selected server or channel. Runs
-    /// through the same operations as the menus, so a `/part` or `/quit` tidies up the same way.
-    func handleInputFromComposer(_ text: String, selection: UUID?) {
-        func channelForSelection(_ id: UUID?) -> (server: IRCServer, channel: IRCChannel)? {
-            guard let id else { return nil }
-            for s in servers {
-                if let c = s.channels.first(where: { $0.id == id }) { return (s, c) }
-            }
-            return nil
-        }
+    /// Carries out a line typed into the composer: text goes to the selected conversation, and
+    /// slash commands act on the selected server or channel. Runs through the same operations
+    /// as the menus, so a `/part` or `/quit` tidies up the same way.
+    func handleInputFromComposer(_ text: String) {
+        let selection = selectedItem
         /// Feedback line in the selected channel, or else in the selected server's log.
         func log(_ message: String) {
+            guard let selection else { return }
             let msg = ChatMessage(time: Date(), text: message)
-            if let (_, c) = channelForSelection(selection) {
-                c.log.append(msg)
-            } else if let s = serverForSelection(selection) {
-                s.log.append(msg)
+            if let channel = selection.channel {
+                channel.log.append(msg)
             } else {
-                return
+                selection.server.log.append(msg)
             }
             noteLogsChanged()
             scanMessageForThumbnails(msg)
@@ -635,34 +613,34 @@ extension ChatStore {
 
         switch MessageRouter.parse(text) {
         case .text(let body):
-            guard !body.isEmpty, let destination = Self.destination(for: selection, in: servers) else { return }
-            connectionService.sendMessage(body, to: destination.target, from: destination.server)
+            guard !body.isEmpty, let selection else { return }
+            connectionService.sendMessage(body, to: selection.messageTarget, from: selection.server)
 
         case .me(let action):
-            guard let destination = Self.destination(for: selection, in: servers) else { return }
-            if case .server = destination.target { log("Select a channel or private conversation to use /me."); return }
-            connectionService.sendMessage(action, asAction: true, to: destination.target, from: destination.server)
+            guard let selection else { return }
+            if case .server = selection.kind { log("Select a channel or private conversation to use /me."); return }
+            connectionService.sendMessage(action, asAction: true, to: selection.messageTarget, from: selection.server)
 
         case .join(let name, let key):
-            guard let s = serverForSelection(selection) else { log("Select a server to join a channel."); return }
-            joinChannel(name, key: key, on: s)
+            guard let server = selection?.server else { log("Select a server to join a channel."); return }
+            joinChannel(name, key: key, on: server)
 
         case .part(let target):
             if let target {
                 // Part a specific channel by name
-                guard let s = serverForSelection(selection) else { log("No active server."); return }
-                if let channel = s.channel(named: target) {
+                guard let server = selection?.server else { log("No active server."); return }
+                if let channel = server.channel(named: target) {
                     partChannel(channel)
                 } else {
                     log("Not in channel \(target)")
                 }
-            } else if let (_, ch) = channelForSelection(selection) {
-                partChannel(ch)
+            } else if let channel = selection?.channel {
+                partChannel(channel)
             } else { log("Select a channel to part.") }
 
         case .nick(let newNickRaw):
-            guard let s = serverForSelection(selection) else { log("No active server."); return }
-            guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
+            guard let server = selection?.server else { log("No active server."); return }
+            guard let client = connectionService.clients[server.id], connectionService.isRegistered(server.id) else { log("Not connected."); return }
             if IRCName.isValidNickname(newNickRaw) {
                 client.send(.nick(newNickRaw))
                 // Don't update currentNick optimistically - wait for server confirmation
@@ -670,23 +648,23 @@ extension ChatStore {
             } else { log("Invalid nickname.") }
 
         case .msg(let target, let message):
-            guard let s = serverForSelection(selection) else { log("No active server."); return }
+            guard let server = selection?.server else { log("No active server."); return }
             // Use the proper send flow which handles logging, error handling, and PM conversation creation
-            connectionService.sendMessageToTarget(message, targetName: target, from: s)
+            connectionService.sendMessageToTarget(message, targetName: target, from: server)
 
         case .quit:
-            if let s = serverForSelection(selection) { disconnect(s) } else { log("No active server.") }
+            if let server = selection?.server { disconnect(server) } else { log("No active server.") }
 
         case .names:
-            guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to list names."); return }
-            guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
-            client.send(.names(ch.name))
+            guard let selection, let channel = selection.channel else { log("Select a channel to list names."); return }
+            guard let client = connectionService.clients[selection.server.id], connectionService.isRegistered(selection.server.id) else { log("Not connected."); return }
+            client.send(.names(channel.name))
 
         case .topic(let newTopic):
-            guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to set or view the topic."); return }
-            guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
+            guard let selection, let channel = selection.channel else { log("Select a channel to set or view the topic."); return }
+            guard let client = connectionService.clients[selection.server.id], connectionService.isRegistered(selection.server.id) else { log("Not connected."); return }
             // With no new topic, this asks the server for the current one.
-            client.send(.topic(ch.name, newTopic))
+            client.send(.topic(channel.name, newTopic))
 
         case .usage(let cmd):
             switch cmd {
@@ -700,17 +678,5 @@ extension ChatStore {
         case .unknown(let cmd):
             if !cmd.isEmpty { log("Unknown command: /\(cmd)") }
         }
-    }
-
-    /// Where text typed with `selection` selected goes: a channel, a private conversation,
-    /// or the server log, along with the server it belongs to.
-    private static func destination(for selection: UUID?, in servers: [IRCServer]) -> (server: IRCServer, target: MessageTarget)? {
-        guard let id = selection else { return nil }
-        for s in servers {
-            if let ch = s.channels.first(where: { $0.id == id }) { return (s, .channel(ch)) }
-            if let pm = s.privateMessages.first(where: { $0.id == id }) { return (s, .privateMessage(pm)) }
-            if s.id == id { return (s, .server) }
-        }
-        return nil
     }
 }
