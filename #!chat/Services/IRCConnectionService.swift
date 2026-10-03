@@ -405,7 +405,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             return
         }
 
-        if targetName.hasPrefix("#") {
+        if IRCName.isChannel(targetName) {
             // Channel message - find or create channel
             let channel = server.getOrCreateChannel(named: targetName)
             sendMessage(trimmed, to: .channel(channel), from: server)
