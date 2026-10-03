@@ -106,7 +106,11 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     
     // MARK: - Connection Management
     
+    /// Connects at the user's request (or for auto-connect on launch), which also makes the
+    /// server eligible for automatic reconnects, starting from a fresh set of attempts.
     func connect(_ server: IRCServer) {
+        server.shouldAutoReconnect = true
+        connectionService.resetReconnectionAttempts(for: server)
         connectionService.connect(server)
     }
     
@@ -383,13 +387,13 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     func ircConnectionServiceNetworkDidBecomeAvailable(_ service: IRCConnectionService) {
-        // Reconnect all servers that should auto-reconnect and are currently disconnected
-        let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout, .reconnectionFailed]
+        // Reconnect the servers that should auto-reconnect and are currently disconnected.
+        // (Not .reconnectionFailed: running out of retries clears shouldAutoReconnect.)
+        let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout]
         for server in servers {
             if server.shouldAutoReconnect && disconnectedStates.contains(server.connectionStatus) {
                 server.log.append(ChatMessage(time: Date(), text: "Network available, reconnecting..."))
                 noteLogsChanged()
-                connectionService.resetReconnectionAttempts(for: server)
                 connect(server)
             }
         }
