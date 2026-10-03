@@ -20,7 +20,7 @@ struct HighlightTests {
         // going and find the real standalone mention afterwards.
         ("AllMelody", "AllMelodyFan and AllMelody are different"),
     ])
-    func mentions(nick: String, text: String) {
+    func `Standalone mentions of the nick`(nick: String, text: String) {
         #expect(Formatting.mentionsNick(nick, in: text))
     }
 
@@ -35,7 +35,7 @@ struct HighlightTests {
         ("", "anything"),                                 // empty inputs
         ("AllMelody", ""),
     ])
-    func doesNotMention(nick: String, text: String) {
+    func `Near misses are not mentions`(nick: String, text: String) {
         #expect(!Formatting.mentionsNick(nick, in: text))
     }
 

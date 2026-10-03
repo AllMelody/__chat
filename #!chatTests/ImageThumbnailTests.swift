@@ -13,7 +13,7 @@ struct ImageThumbnailTests {
         ("https://www.youtube.com/shorts/abc123XYZ", "abc123XYZ"),          // shorts
         ("https://youtube.com/watch?list=PL&v=ZZZ999&t=10s", "ZZZ999"),     // extra params
     ])
-    func youTubeThumbnail(url: String, videoID: String) throws {
+    func `YouTube links map to their thumbnail`(url: String, videoID: String) throws {
         #expect(try thumb(url) == "https://i.ytimg.com/vi/\(videoID)/hqdefault.jpg")
     }
 
@@ -22,7 +22,7 @@ struct ImageThumbnailTests {
         "https://www.youtube.com/", // no video id
         "https://vimeo.com/12345",
     ])
-    func nonYouTubeReturnsNil(url: String) throws {
+    func `Other links have no YouTube thumbnail`(url: String) throws {
         #expect(try thumb(url) == nil)
     }
 }

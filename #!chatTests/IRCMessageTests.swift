@@ -23,7 +23,7 @@ struct IRCMessageTests {
         ("JOIN   #a    key  ", "JOIN", ["#a", "key"]),                  // extra spaces
         ("NOTICE * :a  b ", "NOTICE", ["*", "a  b "]),                  // trailing keeps its spaces
     ])
-    func parses(line: String, command: String, parameters: [String]) throws {
+    func `Parses commands and parameters`(line: String, command: String, parameters: [String]) throws {
         let message = try #require(IRCMessage(line))
         #expect(message.command == command)
         #expect(message.parameters == parameters)

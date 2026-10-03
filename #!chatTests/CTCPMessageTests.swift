@@ -9,7 +9,7 @@ struct CTCPMessageTests {
         ("\u{1}ping 1700000000 42\u{1}", CTCPMessage(command: "PING", parameters: "1700000000 42")),
         ("\u{1}ACTION \u{1}", CTCPMessage(command: "ACTION", parameters: "")),
     ])
-    func parses(text: String, expected: CTCPMessage) {
+    func `Parses CTCP messages`(text: String, expected: CTCPMessage) {
         #expect(CTCPMessage(parsing: text) == expected)
     }
 

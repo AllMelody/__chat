@@ -20,7 +20,7 @@ struct SlashCommandTests {
         ("/wat", .unknown("wat")),
         ("/", .unknown("")),                                                        // bare slash
     ] as [(String, MessageRouter.ParsedCommand)])
-    func parse(input: String, expected: MessageRouter.ParsedCommand) {
+    func `Parses composer input`(input: String, expected: MessageRouter.ParsedCommand) {
         #expect(MessageRouter.parse(input) == expected)
     }
 }
