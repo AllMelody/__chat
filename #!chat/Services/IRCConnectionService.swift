@@ -5,7 +5,7 @@ import Network
 /// Owns one IRCClient per connected server, and reports what happens on each to its owner
 /// as `Event`s. Everything here, including IRCClient's events and all IRCServer model
 /// mutation, runs on the main actor.
-final class IRCConnectionService: ReconnectionManagerDelegate {
+final class IRCConnectionService {
     /// What the service reports about one of its servers.
     enum Event {
         /// A line was added to one of the server's logs: a message we sent, a status line, or
@@ -65,7 +65,8 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
 
     // Reconnection handling
-    private let reconnectionManager = ReconnectionManager()
+    private var reconnection = ReconnectionPolicy.default
+    private var reconnectTasks: [UUID: Task<Void, any Error>] = [:]
 
     // Network monitoring for immediate disconnect detection
     private var pathMonitorTask: Task<Void, Never>?
@@ -77,10 +78,10 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     /// line. Off by default; mirrored from AppPreferences at launch and when toggled.
     var debugRawServerLog = false
 
-    // Server lookup for reconnection callbacks
+    // Server lookup for client events and teardown, which only know a server's ID
     private var serverLookup: ((UUID) -> IRCServer?)?
 
-    /// Configure the server lookup closure. Must be called before reconnection can work.
+    /// Configure the server lookup closure. Must be called before connecting.
     func configureServerLookup(_ lookup: @escaping (UUID) -> IRCServer?) {
         self.serverLookup = lookup
     }
@@ -92,7 +93,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     init() {
         setupNetworkMonitoring()
         setupSleepWakeMonitoring()
-        reconnectionManager.delegate = self
     }
 
     deinit {
@@ -106,7 +106,9 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             task.cancel()
         }
         queueTask?.cancel()
-        // Reconnection manager cleans up in its own deinit
+        for task in reconnectTasks.values {
+            task.cancel()
+        }
     }
 
     // MARK: - Sleep/Wake Monitoring
@@ -140,7 +142,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     /// One shared checklist so the paths can't drift apart (network loss used to skip
     /// the timers, leaking a live connect-timeout that could double-schedule reconnects).
     private func tearDownConnection(for serverID: UUID) {
-        reconnectionManager.cancelReconnection(for: serverID)
+        cancelReconnection(for: serverID)
         pingTasks.removeValue(forKey: serverID)?.cancel()
         lastPongReceived.removeValue(forKey: serverID)
         connectionTimeouts.removeValue(forKey: serverID)?.cancel()
@@ -219,7 +221,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         server.connectionStatus = .connecting
         
         let statusText = server.displayAttempt > 0 ?
-            "Reconnecting to \(server.name) (attempt \(server.displayAttempt)/\(ReconnectionManager.Policy.default.maxAttempts))" :
+            "Reconnecting to \(server.name) (attempt \(server.displayAttempt)/\(reconnection.maxAttempts))" :
             "Connecting to \(server.name) (\(server.host):\(server.port))"
         logToServer(statusText, on: server)
 
@@ -249,7 +251,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         
         // Cancel any timers
         cancelConnectionTimeout(for: server)
-        reconnectionManager.cancelReconnection(for: server.id)
+        cancelReconnection(for: server.id)
         stopPingMonitoring(for: server)
         
         clients.removeValue(forKey: server.id)?.quit()
@@ -300,38 +302,43 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         }
     }
     
+    /// Retries the connection as the reconnection policy says: the first attempt right away,
+    /// later ones after a pause, and none once the attempts run out. The connect itself always
+    /// runs as a task of its own, so it never starts in the middle of handling whatever ended
+    /// the previous connection.
     func scheduleReconnection(for server: IRCServer) {
-        reconnectionManager.scheduleReconnection(for: server.id)
+        cancelReconnection(for: server.id)
+
+        switch reconnection.nextAttempt(for: server.id) {
+        case .giveUp:
+            server.connectionStatus = .reconnectionFailed
+            server.shouldAutoReconnect = false
+            logToServer("Failed to reconnect to \(server.name) after \(reconnection.maxAttempts) attempts", on: server)
+
+        case .retry(let attempt, let delay):
+            server.connectionStatus = .reconnecting
+            server.displayAttempt = attempt
+            logToServer("Reconnecting to \(server.name) in \(delay.components.seconds) seconds... (attempt \(attempt)/\(reconnection.maxAttempts))", on: server)
+
+            // Task.sleep only throws on cancellation, which simply ends the task.
+            reconnectTasks[server.id] = Task { [weak self] in
+                if delay > .zero { try await Task.sleep(for: delay) }
+                // A cancel can land after the sleep finished but before we resumed on main.
+                try Task.checkCancellation()
+                guard let self else { return }
+                self.reconnectTasks[server.id] = nil
+                self.connect(server)
+            }
+        }
+    }
+
+    private func cancelReconnection(for serverID: UUID) {
+        reconnectTasks.removeValue(forKey: serverID)?.cancel()
     }
 
     func resetReconnectionAttempts(for server: IRCServer) {
-        reconnectionManager.resetAttempts(for: server.id)
+        reconnection.reset(for: server.id)
         server.displayAttempt = 0
-    }
-
-    // MARK: - ReconnectionManagerDelegate
-
-    func reconnectionManager(_ manager: ReconnectionManager, shouldReconnect serverID: UUID) {
-        guard let server = serverLookup?(serverID) else { return }
-        connect(server)
-    }
-
-    func reconnectionManager(_ manager: ReconnectionManager, didScheduleReconnect serverID: UUID, attempt: Int, delay: Duration) {
-        guard let server = serverLookup?(serverID) else { return }
-
-        server.connectionStatus = .reconnecting
-        server.displayAttempt = attempt
-
-        logToServer("Reconnecting to \(server.name) in \(delay.components.seconds) seconds... (attempt \(attempt)/\(ReconnectionManager.Policy.default.maxAttempts))", on: server)
-    }
-
-    func reconnectionManager(_ manager: ReconnectionManager, didExhaustAttempts serverID: UUID, maxAttempts: Int) {
-        guard let server = serverLookup?(serverID) else { return }
-
-        server.connectionStatus = .reconnectionFailed
-        server.shouldAutoReconnect = false
-
-        logToServer("Failed to reconnect to \(server.name) after \(maxAttempts) attempts", on: server)
     }
     
     func startPingMonitoring(for server: IRCServer) {
