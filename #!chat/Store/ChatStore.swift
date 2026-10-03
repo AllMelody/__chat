@@ -347,11 +347,10 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     }
 
     private func loadServers() {
-        guard let data = UserDefaults.standard.data(forKey: serversPersistenceKey),
-              let records = try? JSONDecoder().decode([IRCServerRecord].self, from: data) else {
-            servers = []
-            return
-        }
+        guard let data = UserDefaults.standard.data(forKey: serversPersistenceKey) else { return }
+        // A list that won't decode is a bug to fix, not data to replace: crash rather than let
+        // the `servers` didSet persist an empty list over the user's servers.
+        let records = try! JSONDecoder().decode([IRCServerRecord].self, from: data)
         var migrated = false
         let loaded: [IRCServer] = records.map { record in
             let server = IRCServer(from: record)
