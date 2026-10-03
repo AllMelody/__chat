@@ -417,7 +417,9 @@ final class ChatStore: IRCConnectionServiceDelegate {
         server.log.append(ChatMessage(time: Date(), text: statusText))
         noteLogsChanged()
 
-        connectionService.resetReconnectionAttempts(for: server)
+        // Reconnection attempts reset only once the connection proves stable (its first PONG,
+        // see IRCConnectionService), so a server that drops us right after the welcome can't
+        // keep us redialing forever.
         server.shouldAutoReconnect = true
 
         for channel in server.channels {

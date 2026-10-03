@@ -29,7 +29,8 @@ final class IRCServer: Identifiable {
     /// Read-only mirror of the current reconnection attempt, for log/display only.
     /// The source of truth for attempt counting and policy is ReconnectionManager;
     /// this is updated via the IRCConnectionService -> ReconnectionManagerDelegate hop
-    /// and reset to 0 on a successful connect or an explicit disconnect.
+    /// and reset to 0 once a connection proves stable (its first PONG), when the user
+    /// connects, or on an explicit disconnect.
     var displayAttempt: Int = 0
     /// Whether the app should bring this connection back by itself after a drop, a wake from
     /// sleep, or a network outage. Set when the user (or auto-connect on launch) connects;

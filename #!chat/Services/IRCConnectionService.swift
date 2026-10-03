@@ -575,6 +575,11 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
         case .pong:
             lastPongReceived[serverID] = .now
+            // The first keep-alive round trip, a minute after registering, is what makes a
+            // reconnect count as successful and earns a fresh set of attempts.
+            if let server = serverLookup?(serverID), server.displayAttempt > 0 {
+                resetReconnectionAttempts(for: server)
+            }
 
         // Server time, when present, dates bouncer backlog to when it was originally sent.
         case .channelMessage(let channel, let message):
