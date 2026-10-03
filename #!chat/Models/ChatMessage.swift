@@ -14,8 +14,11 @@ struct ChatMessage: Identifiable, Equatable {
     let isHighlight: Bool
     /// A `/me` action: `text` is what `senderNick` did, shown as "* nick text".
     let isAction: Bool
+    /// For a channel message sent only to members with some status, the target it was sent
+    /// to, like `@#chan` for operators only.
+    let statusTarget: String?
 
-    init(time: Date, text: String, senderNick: String? = nil, isPrivmsg: Bool = false, isFromMe: Bool = false, isHighlight: Bool = false, isAction: Bool = false) {
+    init(time: Date, text: String, senderNick: String? = nil, isPrivmsg: Bool = false, isFromMe: Bool = false, isHighlight: Bool = false, isAction: Bool = false, statusTarget: String? = nil) {
         self.time = time
         self.text = text
         self.senderNick = senderNick
@@ -23,6 +26,7 @@ struct ChatMessage: Identifiable, Equatable {
         self.isFromMe = isFromMe
         self.isHighlight = isHighlight
         self.isAction = isAction
+        self.statusTarget = statusTarget
     }
 }
 

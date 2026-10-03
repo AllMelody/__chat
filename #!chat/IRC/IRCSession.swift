@@ -17,13 +17,19 @@ nonisolated struct IRCSession {
     private(set) var nickname: String
     private(set) var isRegistered = false
 
+    private let preferredNickname: String
     private let password: String?
     private var isNegotiatingCapabilities = true
     private var offeredCapabilities: Set<String> = []
+    private var nicknameFallbacks = 0
+    /// Channel-member statuses the server lets messages target, like `@` in `@#chan`
+    /// (ISUPPORT STATUSMSG). None until the server advertises some.
+    private var statusMessagePrefixes: Set<Character> = []
     private var messageOfTheDay = ""
 
     init(nickname: String, password: String?) {
         self.nickname = nickname
+        self.preferredNickname = nickname
         self.password = password
     }
 
@@ -57,10 +63,25 @@ nonisolated struct IRCSession {
             isNegotiatingCapabilities = false
             nickname = parameters.first ?? nickname
             return Output(events: [.registered(nickname: nickname)])
-        case "432", "433", "436", "437", // bad nickname: erroneous, in use, collision, unavailable
-             "463", "464", "465":        // not allowed: host, password, banned
+        case "433", "436", "437": // nickname in use, collision, temporarily unavailable
+            guard !isRegistered else { return Output() }
+            // Fall back to nick_, nick__, nick___ before giving up.
+            guard nicknameFallbacks < Self.maximumNicknameFallbacks else {
+                return Output(events: [.registrationFailed(reason: parameters.last ?? message.command)])
+            }
+            nicknameFallbacks += 1
+            nickname = preferredNickname + String(repeating: "_", count: nicknameFallbacks)
+            return Output(replies: [.nick(nickname)])
+        case "432",               // erroneous nickname: no variation of it will do
+             "463", "464", "465": // not allowed: host, password, banned
             guard !isRegistered else { return Output() }
             return Output(events: [.registrationFailed(reason: parameters.last ?? message.command)])
+        case "005": // RPL_ISUPPORT <nick> <token>… :are supported by this server
+            for token in parameters.dropFirst().dropLast() {
+                if token.hasPrefix("STATUSMSG=") { statusMessagePrefixes = Set(token.dropFirst("STATUSMSG=".count)) }
+                if token == "-STATUSMSG" { statusMessagePrefixes = [] }
+            }
+            return Output()
 
         case "375": // RPL_MOTDSTART
             messageOfTheDay = (parameters.last ?? "") + "\n"
@@ -195,19 +216,35 @@ nonisolated struct IRCSession {
         IRCName.equal(nick, nickname)
     }
 
-    /// Sorts a PRIVMSG into its conversation: a channel, or a private chat with `peer`. A
-    /// private message between two other people (which the server never sends) is dropped.
+    /// Sorts a PRIVMSG into its conversation: a channel (possibly addressed to some of its
+    /// members only, like `@#chan`), or a private chat with `peer`. A private message between
+    /// two other people (which the server never sends) is dropped.
     private func messageEvent(from sender: String, to target: String, text: String, isAction: Bool = false, time: Date?) -> IRCEvent? {
-        if IRCName.isChannel(target) {
-            .channelMessage(channel: target, sender: sender, text: text, isAction: isAction, isOwn: isSelf(sender), time: time)
+        var message = IRCEvent.Message(sender: sender, text: text, isAction: isAction, isOwn: isSelf(sender), time: time)
+        if let (prefix, channel) = statusMessageTarget(target) {
+            message.statusPrefix = prefix
+            return .channelMessage(channel: channel, message)
+        } else if IRCName.isChannel(target) {
+            return .channelMessage(channel: target, message)
         } else if isSelf(target) {
-            .privateMessage(peer: sender, sender: sender, text: text, isAction: isAction, isOwn: false, time: time)
+            message.isOwn = false
+            return .privateMessage(peer: sender, message)
         } else if isSelf(sender) {
-            .privateMessage(peer: target, sender: sender, text: text, isAction: isAction, isOwn: true, time: time)
+            return .privateMessage(peer: target, message)
         } else {
-            nil
+            return nil
         }
     }
+
+    /// Splits a STATUSMSG target like `@#chan` into its status prefix and channel, when the
+    /// server has advertised that prefix.
+    private func statusMessageTarget(_ target: String) -> (prefix: Character, channel: String)? {
+        guard let prefix = target.first, statusMessagePrefixes.contains(prefix) else { return nil }
+        let channel = String(target.dropFirst())
+        return IRCName.isChannel(channel) ? (prefix, channel) : nil
+    }
+
+    private static let maximumNicknameFallbacks = 3
 
     /// Channel-member status prefixes in RPL_NAMREPLY: owner, admin, op, half-op, voice.
     private static let memberStatusPrefixes: Set<Character> = ["~", "&", "@", "%", "+"]

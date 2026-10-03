@@ -578,15 +578,14 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             lastPongReceived[serverID] = .now
 
         // Server time, when present, dates bouncer backlog to when it was originally sent.
-        case .channelMessage(let channel, let sender, let text, let isAction, let isOwn, let time):
-            let isHighlight = !isOwn && Formatting.mentionsNick(client.nickname, in: text)
-            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight, isAction: isAction)
-            delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .channel(channel, isMine: isOwn))
+        case .channelMessage(let channel, let message):
+            let statusTarget = message.statusPrefix.map { "\($0)\(channel)" }
+            delegate?.ircConnectionService(self, didReceiveMessage: chatMessage(message, statusTarget: statusTarget, nickname: client.nickname),
+                                           for: serverID, target: .channel(channel, isMine: message.isOwn))
 
-        case .privateMessage(let peer, let sender, let text, let isAction, let isOwn, let time):
-            let isHighlight = !isOwn && Formatting.mentionsNick(client.nickname, in: text)
-            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight, isAction: isAction)
-            delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .privateMessage(peer))
+        case .privateMessage(let peer, let message):
+            delegate?.ircConnectionService(self, didReceiveMessage: chatMessage(message, nickname: client.nickname),
+                                           for: serverID, target: .privateMessage(peer))
 
         case .notice(let text, let time):
             logServerEvent("NOTICE: \(text)", time: time, for: serverID)
@@ -619,6 +618,14 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         case .whoReply(let channel, let nick):
             delegate?.ircConnectionService(self, didReceiveWhoReply: nick, for: channel, on: serverID)
         }
+    }
+
+    /// The log entry for a received PRIVMSG. Someone else's message that mentions `nickname`
+    /// (ours) is a highlight.
+    private func chatMessage(_ message: IRCEvent.Message, statusTarget: String? = nil, nickname: String) -> ChatMessage {
+        ChatMessage(time: message.time ?? Date(), text: message.text, senderNick: message.sender, isPrivmsg: true,
+                    isFromMe: message.isOwn, isHighlight: !message.isOwn && Formatting.mentionsNick(nickname, in: message.text),
+                    isAction: message.isAction, statusTarget: statusTarget)
     }
 
     /// A server-log line reporting something the server said.

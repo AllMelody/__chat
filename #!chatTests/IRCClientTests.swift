@@ -27,7 +27,7 @@ struct IRCClientTests {
         client.send(.privateMessage(to: "#swift", "hello there"))
         #expect(try await server.nextLine() == "PRIVMSG #swift :hello there")
         server.send(":bob!u@h PRIVMSG #swift :hi alice")
-        #expect(await events.next() == .channelMessage(channel: "#swift", sender: "bob", text: "hi alice", isOwn: false, time: nil))
+        #expect(await events.next() == .channelMessage(channel: "#swift", .init(sender: "bob", text: "hi alice", isOwn: false, time: nil)))
 
         server.hangUp()
         #expect(await events.next() == .disconnected(reason: "The server closed the connection"))
@@ -40,9 +40,23 @@ struct IRCClientTests {
         try await server.accept()
         _ = try await server.lines(3)
 
-        server.send(":srv 433 * alice :Nickname is already in use")
-        #expect(await events.next() == .registrationFailed(reason: "Nickname is already in use"))
+        server.send(":srv 464 * :Password incorrect")
+        #expect(await events.next() == .registrationFailed(reason: "Password incorrect"))
         #expect(try await server.nextLine() == nil)   // the client hung up
+    }
+
+    @Test func `A taken nickname falls back to another`() async throws {
+        let server = try await FakeIRCServer()
+        let (client, events) = makeClient(port: server.port)
+        client.connect()
+        try await server.accept()
+        _ = try await server.lines(3)
+
+        server.send(":srv 433 * alice :Nickname is already in use")
+        #expect(try await server.nextLine() == "NICK alice_")
+        server.send(":srv 001 alice_ :Welcome")
+        #expect(await events.next() == .registered(nickname: "alice_"))
+        #expect(client.nickname == "alice_")
     }
 
     @Test func `Quit says goodbye before hanging up`() async throws {

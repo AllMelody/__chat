@@ -666,15 +666,19 @@ private struct LogTextView: NSViewRepresentable {
 
         if msg.isPrivmsg, let nick = msg.senderNick {
             // Chat line: colored nick, gray colon, body in label color. An action reads
-            // "* nick waves" instead.
+            // "* nick waves" instead. A message for some members only names its audience
+            // after the nick: "nick (@#chan): …".
             let isMine = msg.isFromMe || myNick.map { nick.caseInsensitiveCompare($0) == .orderedSame } ?? false
-            let nickString = NSAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes)
+            let sender = NSMutableAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes)
+            if let statusTarget = msg.statusTarget {
+                sender.append(NSAttributedString(string: " (\(statusTarget))", attributes: Self.grayAttributes))
+            }
             if msg.isAction {
                 combined.append(NSAttributedString(string: "* ", attributes: Self.grayAttributes))
-                combined.append(nickString)
+                combined.append(sender)
                 combined.append(NSAttributedString(string: " ", attributes: attrs))
             } else {
-                combined.append(nickString)
+                combined.append(sender)
                 combined.append(NSAttributedString(string: ": ", attributes: Self.grayAttributes))
             }
         }

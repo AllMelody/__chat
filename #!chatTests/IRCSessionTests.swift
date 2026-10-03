@@ -35,10 +35,28 @@ struct IRCSessionTests {
         #expect(session.handle(line(":srv 001 alice_ :Welcome")).events == [])   // only once
     }
 
-    @Test(arguments: ["433", "432", "436", "437", "464", "465"])
+    @Test(arguments: ["432", "463", "464", "465"])
     func `Rejections before registration fail it`(numeric: String) {
         var session = session(registered: false)
         #expect(session.handle(line(":srv \(numeric) * alice :Nope")).events == [.registrationFailed(reason: "Nope")])
+    }
+
+    @Test(arguments: ["433", "436", "437"])
+    func `A taken nickname falls back to nick_ up to three times`(numeric: String) {
+        var session = session(registered: false)
+        for fallback in ["alice_", "alice__", "alice___"] {
+            #expect(session.handle(line(":srv \(numeric) * \(session.nickname) :Taken")) == .init(replies: [.nick(fallback)]))
+            #expect(session.nickname == fallback)
+        }
+        #expect(session.handle(line(":srv \(numeric) * alice___ :Taken")).events == [.registrationFailed(reason: "Taken")])
+    }
+
+    @Test func `Registers under the fallback nickname`() {
+        var session = session(registered: false)
+        _ = session.handle(line(":srv 433 * alice :Nickname is already in use"))
+        #expect(session.handle(line(":srv 001 alice_ :Welcome")).events == [.registered(nickname: "alice_")])
+        #expect(session.handle(line(":bob!u@h PRIVMSG alice_ :hi")).events ==
+                [.privateMessage(peer: "bob", .init(sender: "bob", text: "hi"))])
     }
 
     @Test func `Nickname in use after registration is not a registration failure`() {
@@ -203,21 +221,36 @@ struct IRCSessionTests {
         var session = session()
         let time = try #require(line("@time=2011-10-19T16:40:51Z PING x").serverTime)
         #expect(session.handle(line("@time=2011-10-19T16:40:51Z :bob!u@h PRIVMSG #swift :hi alice")).events ==
-                [.channelMessage(channel: "#swift", sender: "bob", text: "hi alice", isOwn: false, time: time)])
+                [.channelMessage(channel: "#swift", .init(sender: "bob", text: "hi alice", isOwn: false, time: time))])
         #expect(session.handle(line(":alice!u@h PRIVMSG #swift :\u{1}ACTION waves\u{1}")).events ==
-                [.channelMessage(channel: "#swift", sender: "alice", text: "waves", isAction: true, isOwn: true, time: nil)])
+                [.channelMessage(channel: "#swift", .init(sender: "alice", text: "waves", isAction: true, isOwn: true, time: nil))])
     }
 
     @Test func `Private messages are filed under the other person`() {
         var session = session()
         #expect(session.handle(line(":bob!u@h PRIVMSG Alice :psst")).events ==
-                [.privateMessage(peer: "bob", sender: "bob", text: "psst", isOwn: false, time: nil)])
+                [.privateMessage(peer: "bob", .init(sender: "bob", text: "psst", isOwn: false, time: nil))])
         // Our own message to bob, sent from another client on the same bouncer (znc.in/self-message).
         #expect(session.handle(line(":alice!u@h PRIVMSG bob :hey")).events ==
-                [.privateMessage(peer: "bob", sender: "alice", text: "hey", isOwn: true, time: nil)])
+                [.privateMessage(peer: "bob", .init(sender: "alice", text: "hey", isOwn: true, time: nil))])
         // ZNC modules talk from names that aren't valid nicknames.
         #expect(session.handle(line(":*status!znc@znc.in PRIVMSG alice :Connected!")).events ==
-                [.privateMessage(peer: "*status", sender: "*status", text: "Connected!", isOwn: false, time: nil)])
+                [.privateMessage(peer: "*status", .init(sender: "*status", text: "Connected!", isOwn: false, time: nil))])
+    }
+
+    @Test func `Messages for some channel members only, as the server advertises`() {
+        var session = session()
+        // Before the server advertises STATUSMSG, "@#swift" is just an unknown target.
+        #expect(session.handle(line(":bob!u@h PRIVMSG @#swift :ops?")) == .init())
+
+        _ = session.handle(line(":srv 005 alice STATUSMSG=@+ CHANTYPES=# :are supported by this server"))
+        #expect(session.handle(line(":bob!u@h PRIVMSG @#swift :ops only")).events ==
+                [.channelMessage(channel: "#swift", .init(sender: "bob", text: "ops only", statusPrefix: "@"))])
+        #expect(session.handle(line(":bob!u@h PRIVMSG +#swift :\u{1}ACTION whispers\u{1}")).events ==
+                [.channelMessage(channel: "#swift", .init(sender: "bob", text: "whispers", isAction: true, statusPrefix: "+"))])
+        // A "+" channel isn't a status message when what follows isn't a channel.
+        #expect(session.handle(line(":bob!u@h PRIVMSG +modeless :hi")).events ==
+                [.channelMessage(channel: "+modeless", .init(sender: "bob", text: "hi"))])
     }
 
     @Test(arguments: [
@@ -243,12 +276,12 @@ struct IRCSessionTests {
     @Test func `Actions in channels and private conversations`() {
         var session = session()
         #expect(session.handle(line(":bob!u@h PRIVMSG #swift :\u{1}ACTION waves at alice\u{1}")).events ==
-                [.channelMessage(channel: "#swift", sender: "bob", text: "waves at alice", isAction: true, isOwn: false, time: nil)])
+                [.channelMessage(channel: "#swift", .init(sender: "bob", text: "waves at alice", isAction: true, isOwn: false, time: nil))])
         #expect(session.handle(line(":bob!u@h PRIVMSG alice :\u{1}ACTION hugs you")).events ==   // no closing \u{1}
-                [.privateMessage(peer: "bob", sender: "bob", text: "hugs you", isAction: true, isOwn: false, time: nil)])
+                [.privateMessage(peer: "bob", .init(sender: "bob", text: "hugs you", isAction: true, isOwn: false, time: nil))])
         // Our own action from another client on the bouncer.
         #expect(session.handle(line(":alice!u@h PRIVMSG bob :\u{1}ACTION shrugs\u{1}")).events ==
-                [.privateMessage(peer: "bob", sender: "alice", text: "shrugs", isAction: true, isOwn: true, time: nil)])
+                [.privateMessage(peer: "bob", .init(sender: "alice", text: "shrugs", isAction: true, isOwn: true, time: nil))])
     }
 
     @Test func `Answers VERSION, even when asked in a channel, privately`() {

@@ -27,15 +27,30 @@ nonisolated enum IRCEvent: Equatable, Sendable {
 
     // MARK: Messages
 
-    /// A PRIVMSG to a channel. `isAction` marks a `/me` (CTCP ACTION), whose `text` is the
-    /// action itself. `isOwn` marks one we sent from another client sharing our bouncer
-    /// connection, or one in replayed backlog; lines this client sends never come back.
-    case channelMessage(channel: String, sender: String, text: String, isAction: Bool = false, isOwn: Bool, time: Date?)
+    /// A PRIVMSG to a channel, including one sent only to its members with some status
+    /// (`message.statusPrefix`).
+    case channelMessage(channel: String, Message)
     /// A PRIVMSG in a private conversation with `peer`: the sender of a message to us, or the
     /// recipient of one we sent from another client (`isOwn`, relayed by a bouncer thanks to
     /// znc.in/self-message).
-    case privateMessage(peer: String, sender: String, text: String, isAction: Bool = false, isOwn: Bool, time: Date?)
+    case privateMessage(peer: String, Message)
     case notice(text: String, time: Date?)
+
+    /// What a PRIVMSG says, wherever it was sent.
+    struct Message: Equatable, Sendable {
+        var sender: String
+        var text: String
+        /// A `/me` (CTCP ACTION): `text` is the action itself.
+        var isAction = false
+        /// One we sent from another client sharing our bouncer connection, or one in replayed
+        /// backlog. Lines this client sends never come back.
+        var isOwn = false
+        /// For a channel message sent only to members with this status or higher (STATUSMSG,
+        /// e.g. `PRIVMSG @#chan`): the prefix, like `@` for operators.
+        var statusPrefix: Character?
+        /// When the server says it was originally sent (IRCv3 server-time), e.g. for backlog.
+        var time: Date?
+    }
 
     // MARK: Channels and users
 
