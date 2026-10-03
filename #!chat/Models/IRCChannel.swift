@@ -13,28 +13,29 @@ final class IRCChannel: Identifiable {
 
     init(name: String) { self.name = name }
 
-    // MARK: - User Management Helpers (case-insensitive)
+    // MARK: - User Management Helpers
+    // Nicks are compared the way the server compares them (IRCName.equal).
 
-    /// Check if a user is present in the channel (case-insensitive)
+    /// Check if a user is present in the channel
     func hasUser(_ nick: String) -> Bool {
-        users.contains(where: { $0.caseInsensitiveCompare(nick) == .orderedSame })
+        users.contains { IRCName.equal($0, nick) }
     }
 
-    /// Add a user to the channel if not already present (case-insensitive check)
+    /// Add a user to the channel if not already present
     func addUserIfNotPresent(_ nick: String) {
         if !hasUser(nick) {
             users.append(nick)
         }
     }
 
-    /// Remove a user from the channel (case-insensitive)
+    /// Remove a user from the channel
     func removeUser(_ nick: String) {
-        users.removeAll { $0.caseInsensitiveCompare(nick) == .orderedSame }
+        users.removeAll { IRCName.equal($0, nick) }
     }
 
-    /// Update a user's nickname (case-insensitive search, preserves case of new nick)
+    /// Update a user's nickname, keeping the new nick's case as given
     func updateUserNick(from oldNick: String, to newNick: String) {
-        if let index = users.firstIndex(where: { $0.caseInsensitiveCompare(oldNick) == .orderedSame }) {
+        if let index = users.firstIndex(where: { IRCName.equal($0, oldNick) }) {
             users[index] = newNick
         }
     }

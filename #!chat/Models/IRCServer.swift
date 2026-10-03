@@ -57,18 +57,19 @@ final class IRCServer: Identifiable {
     }
 
     // MARK: - Channel/PM Helpers
+    // Names are matched the way the server matches them (IRCName.equal).
 
-    /// Existing channel with this name (case-insensitive match)
+    /// Existing channel with this name
     func channel(named name: String) -> IRCChannel? {
-        channels.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        channels.first { IRCName.equal($0.name, name) }
     }
 
-    /// Existing PM conversation with this nick (case-insensitive match)
+    /// Existing PM conversation with this nick
     func privateMessage(with nickname: String) -> IRCPrivateMessage? {
-        privateMessages.first { $0.nickname.caseInsensitiveCompare(nickname) == .orderedSame }
+        privateMessages.first { IRCName.equal($0.nickname, nickname) }
     }
 
-    /// Gets existing channel or creates a new one (case-insensitive match)
+    /// Gets existing channel or creates a new one
     func getOrCreateChannel(named name: String) -> IRCChannel {
         if let existing = channel(named: name) { return existing }
         let channel = IRCChannel(name: name)
@@ -76,7 +77,7 @@ final class IRCServer: Identifiable {
         return channel
     }
 
-    /// Gets existing PM or creates a new one (case-insensitive match)
+    /// Gets existing PM or creates a new one
     func getOrCreatePrivateMessage(with nickname: String) -> IRCPrivateMessage {
         if let existing = privateMessage(with: nickname) { return existing }
         let pm = IRCPrivateMessage(nickname: nickname)

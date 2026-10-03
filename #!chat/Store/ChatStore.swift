@@ -514,7 +514,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
                 // Channel is removed below; release the thumbnail state its log was holding.
                 discardThumbnails(for: channelObj.log)
             }
-            server.channels.removeAll { $0.name.caseInsensitiveCompare(channel) == .orderedSame }
+            server.channels.removeAll { IRCName.equal($0.name, channel) }
             server.log.append(ChatMessage(time: Date(), text: "Parted \(channel)"))
             noteLogsChanged()
         } else {

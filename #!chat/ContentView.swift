@@ -682,7 +682,7 @@ private struct LogTextView: NSViewRepresentable {
             // Chat line: colored nick, gray colon, body in label color. An action reads
             // "* nick waves" instead. A message for some members only names its audience
             // after the nick: "nick (@#chan): …".
-            let isMine = msg.isFromMe || myNick.map { nick.caseInsensitiveCompare($0) == .orderedSame } ?? false
+            let isMine = msg.isFromMe || myNick.map { IRCName.equal(nick, $0) } ?? false
             let sender = NSMutableAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes)
             if let statusTarget = msg.statusTarget {
                 sender.append(NSAttributedString(string: " (\(statusTarget))", attributes: Self.grayAttributes))
