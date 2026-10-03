@@ -170,7 +170,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     // MARK: - Connection Management
     
     func connect(_ server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         guard server.connectionStatus != .connecting && server.connectionStatus != .connected else {
             return
         }
@@ -204,7 +203,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
 
     func disconnect(_ server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         logToServer("Disconnecting from \(server.name)…", on: server)
         
         // Cancel any timers
@@ -295,7 +293,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
     
     func startPingMonitoring(for server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         stopPingMonitoring(for: server)
         lastPongReceived[server.id] = .now
 
@@ -313,7 +310,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
 
     private func stopPingMonitoring(for server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         pingTasks.removeValue(forKey: server.id)?.cancel()
         lastPongReceived.removeValue(forKey: server.id)
     }
@@ -348,7 +344,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     // MARK: - Channel Operations
     
     func joinChannel(_ name: String, key: String? = nil, on server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         guard let client = clients[server.id] else {
             handleSendFailure(for: server, reason: "Cannot join channel: Not connected")
             return
@@ -364,7 +359,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     }
 
     func partChannel(_ channel: IRCChannel, from server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         guard let client = clients[server.id] else {
             handleSendFailure(for: server, reason: "Cannot part channel: Not connected")
             return
@@ -392,7 +386,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     /// Send a message to an arbitrary nick or channel (used by /msg command)
     /// Creates a PM conversation if needed
     func sendMessageToTarget(_ text: String, targetName: String, from server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard clients[server.id] != nil else {
@@ -419,7 +412,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
     /// Sends `text` to a channel or private conversation, one line at a time through the flood
     /// queue; with `asAction`, each line goes out as a `/me` action.
     func sendMessage(_ text: String, asAction isAction: Bool = false, to target: MessageTarget, from server: IRCServer) {
-        dispatchPrecondition(condition: .onQueue(.main))
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
