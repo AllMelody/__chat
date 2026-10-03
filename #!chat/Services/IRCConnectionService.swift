@@ -178,7 +178,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         server.connectionStatus = .connecting
         
         let statusText = server.displayAttempt > 0 ?
-            "Reconnecting to \(server.name) (attempt \(server.displayAttempt + 1)/\(ReconnectionManager.Policy.default.maxAttempts))" :
+            "Reconnecting to \(server.name) (attempt \(server.displayAttempt)/\(ReconnectionManager.Policy.default.maxAttempts))" :
             "Connecting to \(server.name) (\(server.host):\(server.port))"
         logToServer(statusText, on: server)
 
