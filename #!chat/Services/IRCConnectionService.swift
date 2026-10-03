@@ -577,7 +577,7 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
         case .channelMessage(let channel, let message):
             let statusTarget = message.statusPrefix.map { "\($0)\(channel)" }
             delegate?.ircConnectionService(self, didReceiveMessage: chatMessage(message, statusTarget: statusTarget, nickname: client.nickname),
-                                           for: serverID, target: .channel(channel, isMine: message.isOwn))
+                                           for: serverID, target: .channel(channel))
 
         case .privateMessage(let peer, let message):
             delegate?.ircConnectionService(self, didReceiveMessage: chatMessage(message, nickname: client.nickname),
@@ -656,7 +656,7 @@ enum MessageTarget {
 
 enum MessageTargetType {
     case server
-    case channel(String, isMine: Bool)
+    case channel(String)
     case privateMessage(String)
 }
 

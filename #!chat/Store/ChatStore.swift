@@ -462,8 +462,9 @@ final class ChatStore: IRCConnectionServiceDelegate {
             server.log.append(message)
 
         // Nothing to de-duplicate: lines this client sends never come back from the server
-        // (see IRCConnectionService.sendSingleLine); isMine ones were sent from elsewhere.
-        case .channel(let name, let isMine):
+        // (see IRCConnectionService.sendSingleLine); isFromMe ones were sent from elsewhere.
+        // Either way, our own lines never count as unread.
+        case .channel(let name):
             let channel = server.getOrCreateChannel(named: name)
             channel.log.append(message)
             scanMessageForThumbnails(message)
@@ -471,7 +472,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
                 notifyHighlight(for: message, conversation: channel.name, serverName: server.name, nodeID: channel.id)
             }
 
-            if !isMine, selectedNodeID != channel.id {
+            if !message.isFromMe, selectedNodeID != channel.id {
                 channel.unreadCount += 1
             }
 
@@ -483,7 +484,7 @@ final class ChatStore: IRCConnectionServiceDelegate {
                 notifyHighlight(for: message, conversation: "a private message", serverName: server.name, nodeID: pm.id)
             }
 
-            if selectedNodeID != pm.id {
+            if !message.isFromMe, selectedNodeID != pm.id {
                 pm.unreadCount += 1
             }
         }
