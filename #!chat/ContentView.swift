@@ -60,6 +60,12 @@ struct ContentView: View {
                     TopicEditorView(channel: channel)
                 }
             }
+            .confirmationDialog("Delete Server?", isPresented: $model.isPresentingDeleteServer,
+                                presenting: model.server(withID: model.pendingDeleteServerID)) { server in
+                Button("Delete", role: .destructive) { model.deleteServer(server) }
+            } message: { server in
+                Text("“\(server.name)” and its saved password will be removed. This can’t be undone.")
+            }
     }
 
     // MARK: - Left Pane
@@ -139,7 +145,7 @@ struct ContentView: View {
                                 model.pendingEditServerID = server.id
                                 model.isPresentingEditServer = true
                             },
-                            deleteServer: { model.deleteServer(server) }
+                            deleteServer: { model.requestDeletion(of: server) }
                         )
                         separator()
                         ForEach(server.channels) { ch in

@@ -29,13 +29,14 @@ struct ChatApp: App {
                     Button("Add Server…") { model.isPresentingAddServer = true }
                         .keyboardShortcut("n", modifiers: [.command, .shift])
 
+                    // No ⌘⌫ shortcut: menu shortcuts win over the composer, where ⌘⌫ has to
+                    // keep deleting to the start of the line.
                     Button("Delete Server…") {
                         if let server = model.server(withID: model.selectedNodeID) {
-                            model.deleteServer(server)
+                            model.requestDeletion(of: server)
                         }
                     }
                     .disabled(model.server(withID: model.selectedNodeID) == nil)
-                    .keyboardShortcut(.delete, modifiers: [.command])
                 }
                 
                 CommandMenu("Channel") {

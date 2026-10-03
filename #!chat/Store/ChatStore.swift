@@ -30,6 +30,8 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
     var isPresentingJoinChannel: Bool = false
     var pendingJoinServerID: UUID?
     var pendingEditServerID: UUID?
+    var isPresentingDeleteServer: Bool = false
+    var pendingDeleteServerID: UUID?
     var isPresentingTopicEditor: Bool = false
     
     // Preferences
@@ -174,6 +176,13 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         persistServers()
     }
     
+    /// Asks the user to confirm before `deleteServer` runs: deleting can't be undone, and it
+    /// also removes the server's password from the Keychain.
+    func requestDeletion(of server: IRCServer) {
+        pendingDeleteServerID = server.id
+        isPresentingDeleteServer = true
+    }
+
     func deleteServer(_ server: IRCServer) {
         let deletingSelected = (selectedNodeID == server.id)
         let channels = server.channels
