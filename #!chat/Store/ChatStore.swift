@@ -3,11 +3,10 @@ import Foundation
 import Observation
 
 @Observable
-final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
+final class ChatStore: IRCConnectionServiceDelegate {
     // Services
     private let connectionService = IRCConnectionService()
     private let imageCache = ImageCacheService()
-    private let messageRouter = MessageRouter()
     private let keychain = KeychainService()
     private let notificationService = NotificationService()
 
@@ -54,7 +53,6 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         connectionService.configureServerLookup { [weak self] serverID in
             self?.servers.first { $0.id == serverID }
         }
-        messageRouter.delegate = self
         imageCache.onThumbnailUpdated = { [weak self] messageID, thumbnails in
             self?.messageThumbnails[messageID] = thumbnails
         }
@@ -148,12 +146,6 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         server.privateMessages.removeAll { $0.id == pm.id }
         server.log.append(ChatMessage(time: Date(), text: "Closed conversation with \(pm.nickname)"))
         noteLogsChanged()
-    }
-    
-    // MARK: - Messaging
-    
-    func handleInputFromComposer(_ text: String, selection: UUID?) {
-        messageRouter.handleInputFromComposer(text, selection: selection, servers: servers, connectionService: connectionService)
     }
     
     // MARK: - Server CRUD
@@ -398,13 +390,6 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         }
     }
 
-    // MARK: - MessageRouterDelegate
-
-    func messageRouter(_ router: MessageRouter, didAppendMessage message: ChatMessage) {
-        noteLogsChanged()
-        scanMessageForThumbnails(message)
-    }
-    
     func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID, reason: String) {
         guard let server = server(withID: serverID) else { return }
 
@@ -614,5 +599,115 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
 
         server.log.append(logMessage)
         noteLogsChanged()
+    }
+}
+
+// MARK: - Composer Commands
+
+extension ChatStore {
+    /// Carries out a line typed into the composer with `selection` selected: text goes to the
+    /// selected conversation, and slash commands act on the selected server or channel. Runs
+    /// through the same operations as the menus, so a `/part` or `/quit` tidies up the same way.
+    func handleInputFromComposer(_ text: String, selection: UUID?) {
+        func channelForSelection(_ id: UUID?) -> (server: IRCServer, channel: IRCChannel)? {
+            guard let id else { return nil }
+            for s in servers {
+                if let c = s.channels.first(where: { $0.id == id }) { return (s, c) }
+            }
+            return nil
+        }
+        /// Feedback line in the selected channel, or else in the selected server's log.
+        func log(_ message: String) {
+            let msg = ChatMessage(time: Date(), text: message)
+            if let (_, c) = channelForSelection(selection) {
+                c.log.append(msg)
+            } else if let s = serverForSelection(selection) {
+                s.log.append(msg)
+            } else {
+                return
+            }
+            noteLogsChanged()
+            scanMessageForThumbnails(msg)
+        }
+
+        switch MessageRouter.parse(text) {
+        case .text(let body):
+            guard !body.isEmpty, let destination = Self.destination(for: selection, in: servers) else { return }
+            connectionService.sendMessage(body, to: destination.target, from: destination.server)
+
+        case .me(let action):
+            guard let destination = Self.destination(for: selection, in: servers) else { return }
+            if case .server = destination.target { log("Select a channel or private conversation to use /me."); return }
+            connectionService.sendMessage(action, asAction: true, to: destination.target, from: destination.server)
+
+        case .join(let name, let key):
+            guard let s = serverForSelection(selection) else { log("Select a server to join a channel."); return }
+            joinChannel(name, key: key, on: s)
+
+        case .part(let target):
+            if let target {
+                // Part a specific channel by name
+                guard let s = serverForSelection(selection) else { log("No active server."); return }
+                if let channel = s.channel(named: target) {
+                    partChannel(channel)
+                } else {
+                    log("Not in channel \(target)")
+                }
+            } else if let (_, ch) = channelForSelection(selection) {
+                partChannel(ch)
+            } else { log("Select a channel to part.") }
+
+        case .nick(let newNickRaw):
+            guard let s = serverForSelection(selection) else { log("No active server."); return }
+            guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
+            if IRCName.isValidNickname(newNickRaw) {
+                client.send(.nick(newNickRaw))
+                // Don't update currentNick optimistically - wait for server confirmation
+                log("Attempting to change nick to \(newNickRaw)...")
+            } else { log("Invalid nickname.") }
+
+        case .msg(let target, let message):
+            guard let s = serverForSelection(selection) else { log("No active server."); return }
+            // Use the proper send flow which handles logging, error handling, and PM conversation creation
+            connectionService.sendMessageToTarget(message, targetName: target, from: s)
+
+        case .quit:
+            if let s = serverForSelection(selection) { disconnect(s) } else { log("No active server.") }
+
+        case .names:
+            guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to list names."); return }
+            guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
+            client.send(.names(ch.name))
+
+        case .topic(let newTopic):
+            guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to set or view the topic."); return }
+            guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
+            // With no new topic, this asks the server for the current one.
+            client.send(.topic(ch.name, newTopic))
+
+        case .usage(let cmd):
+            switch cmd {
+            case "join": log("Usage: /join #channel [key]")
+            case "nick": log("Usage: /nick newnickname")
+            case "msg":  log("Usage: /msg <target> <message>")
+            case "me":   log("Usage: /me <action>")
+            default:     log("Usage: /\(cmd)")
+            }
+
+        case .unknown(let cmd):
+            if !cmd.isEmpty { log("Unknown command: /\(cmd)") }
+        }
+    }
+
+    /// Where text typed with `selection` selected goes: a channel, a private conversation,
+    /// or the server log, along with the server it belongs to.
+    private static func destination(for selection: UUID?, in servers: [IRCServer]) -> (server: IRCServer, target: MessageTarget)? {
+        guard let id = selection else { return nil }
+        for s in servers {
+            if let ch = s.channels.first(where: { $0.id == id }) { return (s, .channel(ch)) }
+            if let pm = s.privateMessages.first(where: { $0.id == id }) { return (s, .privateMessage(pm)) }
+            if s.id == id { return (s, .server) }
+        }
+        return nil
     }
 }
