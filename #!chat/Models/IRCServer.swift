@@ -118,7 +118,7 @@ struct IRCServerRecord: Codable {
     }
 
     // Custom encode: deliberately OMIT password so it never returns to plaintext storage.
-    func encode(to encoder: Encoder) throws {
+    func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
