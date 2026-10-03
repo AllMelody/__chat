@@ -85,7 +85,7 @@ struct ContentView: View {
             }
             // No leading padding here: the log's left gutter comes from the text view's
             // container inset, so highlight washes can run edge to edge.
-            LogTextView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails, myNick: selectedServer?.currentNick)
+            LogTextView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, 2)
 
@@ -200,7 +200,6 @@ struct ContentView: View {
     private func separator() -> some View { Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: onePixel) }
 
     // MARK: - Data accessors
-    private var selectedServer: IRCServer? { model.server(withID: model.selectedNodeID) }
     private var currentMessages: [ChatMessage] {
         Array((model.selectedItem?.log ?? []).suffix(max(1, prefs.maxLogLines)))
     }
@@ -378,7 +377,6 @@ private struct LogTextView: NSViewRepresentable {
     let messages: [ChatMessage]
     let thumbnailsByMessage: [UUID: [MessageThumbnail]]
     let showThumbnails: Bool
-    let myNick: String?
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var lastSelectionToken: UUID?
@@ -393,9 +391,6 @@ private struct LogTextView: NSViewRepresentable {
         // thumbnail fingerprint of each, so apply() can choose append-fast-path vs full rebuild.
         var lastRenderedIDs: [UUID] = []
         var renderedThumbFingerprints: [UUID: Int] = [:]
-        // myNick affects per-message "is mine" coloring; a change must force a full rebuild so
-        // already-rendered lines recolor (the append-fast-path never revisits old messages).
-        var lastMyNick: String?
 
         deinit {
             if let observer = boundsObserver {
@@ -507,12 +502,10 @@ private struct LogTextView: NSViewRepresentable {
             return hash
         }()
         let selectionChanged = (context.coordinator.lastSelectionToken != selectionToken)
-        let myNickChanged = (context.coordinator.lastMyNick != myNick)
-        if context.coordinator.lastContentSignature != signature || myNickChanged {
-            apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: selectionChanged || myNickChanged)
+        if context.coordinator.lastContentSignature != signature {
+            apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: selectionChanged)
             context.coordinator.lastContentSignature = signature
         }
-        context.coordinator.lastMyNick = myNick
 
         if selectionChanged { context.coordinator.isPinnedToBottom = true }
 
@@ -666,8 +659,7 @@ private struct LogTextView: NSViewRepresentable {
             // Chat line: colored nick, gray colon, body in label color. An action reads
             // "* nick waves" instead. A message for some members only names its audience
             // after the nick: "nick (@#chan): …".
-            let isMine = msg.isFromMe || myNick.map { IRCName.equal(nick, $0) } ?? false
-            let sender = NSMutableAttributedString(string: nick, attributes: isMine ? Self.myNickAttributes : Self.otherNickAttributes)
+            let sender = NSMutableAttributedString(string: nick, attributes: msg.isFromMe ? Self.myNickAttributes : Self.otherNickAttributes)
             if let statusTarget = msg.statusTarget {
                 sender.append(NSAttributedString(string: " (\(statusTarget))", attributes: Self.grayAttributes))
             }
