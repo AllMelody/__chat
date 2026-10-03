@@ -356,7 +356,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
         guard isRegistered(server.id) else {
             handleSendFailure(for: server, reason: "Cannot join channel: Not registered")
-            handleConnectionDead(for: server)
             return
         }
 
@@ -373,7 +372,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
         guard isRegistered(server.id) else {
             handleSendFailure(for: server, reason: "Cannot part channel: Not registered")
-            handleConnectionDead(for: server)
             return
         }
 
@@ -404,7 +402,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
         guard isRegistered(server.id) else {
             handleSendFailure(for: server, reason: "Not registered")
-            handleConnectionDead(for: server)
             return
         }
 
@@ -448,7 +445,6 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
 
         guard isRegistered(server.id) else {
             handleSendFailure(for: server, target: target, reason: "Not registered")
-            handleConnectionDead(for: server)
             return
         }
 
