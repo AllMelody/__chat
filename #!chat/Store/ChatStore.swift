@@ -249,8 +249,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         // First check the observable status - this is the source of truth for UI state
         guard server.connectionStatus == .connected else { return false }
 
-        // Then verify the server is fully registered. Uses a main-thread set in
-        // IRCConnectionService instead of reading IRCClient.state (event-loop-owned).
+        // Then verify the server is fully registered.
         guard connectionService.isRegistered(server.id) else { return false }
 
         // If a channel is selected, only allow sending after the server confirmed our JOIN
@@ -393,13 +392,13 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         scanMessageForThumbnails(message)
     }
     
-    func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID) {
+    func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID, reason: String) {
         guard let server = server(withID: serverID) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
 
         server.connectionStatus = .connectionTimeout
-        server.log.append(ChatMessage(time: Date(), text: "Connection to \(server.name) lost"))
+        server.log.append(ChatMessage(time: Date(), text: "Connection to \(server.name) lost (\(reason))"))
         noteLogsChanged()
 
         if server.shouldAutoReconnect {
@@ -411,6 +410,7 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         guard let server = server(withID: serverID) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
+        server.connectionStatus = .connected
         server.currentNick = nick
 
         let statusText = server.displayAttempt > 0 ?
@@ -429,12 +429,12 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         connectionService.startPingMonitoring(for: server)
     }
     
-    func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID) {
+    func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID, reason: String) {
         guard let server = server(withID: serverID) else { return }
 
         connectionService.cancelConnectionTimeout(for: server)
 
-        server.log.append(ChatMessage(time: Date(), text: "Failed to register with server"))
+        server.log.append(ChatMessage(time: Date(), text: "Failed to register with server (\(reason))"))
         noteLogsChanged()
 
         if server.shouldAutoReconnect {
@@ -442,31 +442,15 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         }
     }
 
-    func ircConnectionService(_ service: IRCConnectionService, server serverID: UUID, connectionStateChanged state: IRCClient.ConnectionState) {
-        guard let server = server(withID: serverID) else { return }
-
-        // Map IRCClient.ConnectionState to IRCServer.ConnectionStatus
-        switch state {
-        case .disconnected:
-            // Only update if we think we're connected or connecting.
-            // If we're already in a disconnect-related state (reconnecting, timeout, failed),
-            // a more specific callback will handle setting the appropriate status.
-            if server.connectionStatus == .connected || server.connectionStatus == .connecting {
-                server.connectionStatus = .disconnected
-            }
-        case .connecting:
-            // Only set to connecting if not already in a reconnecting state
-            if server.connectionStatus != .reconnecting {
-                server.connectionStatus = .connecting
-            }
-        case .connected:
-            server.connectionStatus = .connected
-        }
-    }
-
     func ircConnectionService(_ service: IRCConnectionService, serverDidChangeNick serverID: UUID, to nick: String) {
         guard let server = server(withID: serverID) else { return }
 
+        // Our own entry in the member lists follows the rename too.
+        if let oldNick = server.currentNick {
+            for channel in server.channels {
+                channel.updateUserNick(from: oldNick, to: nick)
+            }
+        }
         server.currentNick = nick
         server.log.append(ChatMessage(time: Date(), text: "You are now known as \(nick)"))
         noteLogsChanged()

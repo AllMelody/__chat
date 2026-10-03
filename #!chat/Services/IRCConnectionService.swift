@@ -1,30 +1,17 @@
 import AppKit
 import Foundation
-import NIO
 import Network
-import Synchronization
 
-/// Threading contract: all mutable state on this type (clients, connectionTimeouts, pingTasks,
-/// lastPongReceived, selfNicks, registeredServerIDs, messageQueue, queueTask) and all IRCServer
-/// model mutation MUST happen on the main thread. IRCClientDelegate callbacks arrive on the NIO
-/// event loop (they're `nonisolated`) and forward a ClientEvent through an AsyncStream that is
-/// drained in order on the main actor before touching any of it.
-/// client.send(...) is safe to call from main (it re-enters the event loop internally). Never read
-/// IRCClient.state from main — use registeredServerIDs instead.
-final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate {
+/// Owns one IRCClient per connected server and turns their events into model updates.
+/// Everything here, including IRCClient's events and all IRCServer model mutation, runs on
+/// the main actor.
+final class IRCConnectionService: ReconnectionManagerDelegate {
     // Clients and connection state
     private(set) var clients: [UUID: IRCClient] = [:]
     private var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
     private var pingTasks: [UUID: Task<Void, any Error>] = [:]
     /// Monotonic, so wall-clock changes (NTP, manual edits) can't fake a dead connection.
     private var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
-    private var selfNicks: [UUID: String] = [:]
-
-    /// Server IDs for clients that have completed registration. Maintained ENTIRELY on the
-    /// main thread: inserted in the `serverDidRegister` main hop, removed on every disconnect
-    /// path. Lets `ChatStore.canSendMessage` gate sends WITHOUT reading IRCClient.state, which
-    /// is owned by the NIO event loop (cross-thread read removed).
-    private var registeredServerIDs: Set<UUID> = []
 
     // Message send queue (flood protection)
     private var messageQueue: [(text: String, target: MessageTarget, server: IRCServer)] = []
@@ -41,14 +28,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     // Default nick
     private let defaultNick = "Guest\(Int.random(in: 1000...9999))"
 
-    /// When true, every received IRC message is echoed to the server log as a "RECV:" line.
-    /// Off by default; mirrored from AppPreferences at launch and when toggled.
-    /// Written on main, read on the NIO event loop, so it's backed by an atomic.
-    var debugRawServerLog: Bool {
-        get { debugRawServerLogFlag.load(ordering: .relaxed) }
-        set { debugRawServerLogFlag.store(newValue, ordering: .relaxed) }
-    }
-    private nonisolated let debugRawServerLogFlag = Atomic<Bool>(false)
+    /// When true, every line received from a server is echoed to its server log as a "RECV:"
+    /// line. Off by default; mirrored from AppPreferences at launch and when toggled.
+    var debugRawServerLog = false
 
     // Delegate for server updates
     weak var delegate: IRCConnectionServiceDelegate?
@@ -69,11 +51,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         setupNetworkMonitoring()
         setupSleepWakeMonitoring()
         reconnectionManager.delegate = self
-        startClientEventLoop()
     }
 
     deinit {
-        clientEvents.continuation.finish()
         pathMonitorTask?.cancel()
         // Cancel all connect timeouts
         for task in connectionTimeouts.values {
@@ -134,8 +114,6 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         if let client = clients.removeValue(forKey: serverID) {
             client.close()
         }
-        selfNicks.removeValue(forKey: serverID)
-        registeredServerIDs.remove(serverID)
     }
 
     private func clearMessageQueue() {
@@ -204,25 +182,18 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         logToServer(statusText, on: server)
 
         // Per-server nick: explicit server nickname, else last-known currentNick, else the app
-        // default, else "Guest". First candidate that is a valid IRCNickName wins.
-        let nick = [server.nickname, server.currentNick, defaultNick, "Guest"]
+        // default, else "Guest". First candidate that is a valid nickname wins.
+        let nick = [server.nickname, server.currentNick, defaultNick]
             .lazy
             .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .compactMap { IRCNickName($0) }
-            .first ?? IRCNickName("Guest")!
-        let opts = IRCClientOptions(
-            port: server.port,
-            host: server.host,
-            password: server.password,
-            nickname: nick,
-            userInfo: nil,
-            eventLoopGroup: nil
-        )
-        opts.useTLS = server.useTLS
-        let client = IRCClient(options: opts)
-        client.delegate = self
-        client.serverID = server.id
+            .first(where: IRCName.isValidNickname) ?? "Guest"
+        let client = IRCClient(host: server.host, port: server.port, useTLS: server.useTLS,
+                               nickname: nick, password: server.password)
+        client.onEvent = { [weak self, weak client, serverID = server.id] event in
+            guard let self, let client else { return }
+            self.handle(event, from: client, serverID: serverID)
+        }
+        clients[server.id]?.close()   // a replaced client must not keep reporting
         clients[server.id] = client
         
         // Set up connection timeout
@@ -240,9 +211,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         reconnectionManager.cancelReconnection(for: server.id)
         stopPingMonitoring(for: server)
         
-        if let c = clients.removeValue(forKey: server.id) { c.close() }
-        selfNicks.removeValue(forKey: server.id)
-        registeredServerIDs.remove(server.id)
+        clients.removeValue(forKey: server.id)?.quit()
         messageQueue.removeAll { $0.server.id == server.id }
         if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
         server.channels.removeAll()
@@ -270,9 +239,9 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
     
     private func handleConnectionTimeout(for server: IRCServer) {
-        // Allow timeout handling if we're still trying to connect OR if we just
-        // received a disconnect during the connection attempt. Prevents skipping
-        // cleanup when connectionStateChanged(.disconnected) fires before timeout.
+        // Allow timeout handling if we're still trying to connect OR if the connection
+        // attempt just ended. Prevents skipping cleanup when the status turned
+        // .disconnected right before the timeout fired.
         let validStates: [IRCServer.ConnectionStatus] = [.connecting, .disconnected]
         guard validStates.contains(server.connectionStatus) else { return }
 
@@ -284,10 +253,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         server.connectionStatus = .connectionTimeout
 
         // Close the client connection if it exists
-        if let client = clients.removeValue(forKey: server.id) {
-            client.close()
-        }
-        registeredServerIDs.remove(server.id)
+        clients.removeValue(forKey: server.id)?.close()
 
         // Attempt reconnection if enabled
         if server.shouldAutoReconnect {
@@ -363,7 +329,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             return
         }
         
-        client.send(.otherCommand("PING", ["\(Date.now.timeIntervalSince1970)"]))
+        client.send(.ping("\(Date.now.timeIntervalSince1970)"))
     }
     
     private func handleConnectionDead(for server: IRCServer) {
@@ -374,10 +340,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
         logToServer("Connection to \(server.name) lost", on: server)
 
-        if let client = clients.removeValue(forKey: server.id) {
-            client.close()
-        }
-        registeredServerIDs.remove(server.id)
+        clients.removeValue(forKey: server.id)?.close()
 
         stopPingMonitoring(for: server)
         
@@ -401,13 +364,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             return
         }
 
-        let keys = key.map { [ $0 ] }
-        if let ch = IRCChannelName(name) {
-            client.send(.JOIN(channels: [ ch ], keys: keys))
-        } else {
-            client.send(.otherCommand("JOIN", [ name ] + (keys ?? [])))
-        }
-
+        client.send(.join(name, key: key))
         _ = server.getOrCreateChannel(named: name)
     }
 
@@ -424,12 +381,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             return
         }
 
-        if let ch = IRCChannelName(channel.name) {
-            client.send(.PART(channels: [ ch ], message: nil))
-        } else {
-            client.send(.otherCommand("PART", [ channel.name ]))
-        }
-
+        client.send(.part(channel.name))
         server.channels.removeAll { $0.id == channel.id }
         // "Parted X" is logged once, by ChatStore, when the server confirms the PART.
     }
@@ -438,7 +390,7 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
 
     func sendTopicChange(_ newTopic: String, for channelName: String, on server: IRCServer) {
         guard let client = clients[server.id], isRegistered(server.id) else { return }
-        client.send(.otherCommand("TOPIC", [channelName, newTopic]))
+        client.send(.topic(channelName, newTopic))
     }
 
     // MARK: - Messaging
@@ -510,20 +462,15 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
             let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true)
             channel.log.append(msg)
             delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
-
-            if let chName = IRCChannelName(channel.name) {
-                sendWithFailureDetection(.PRIVMSG([ .channel(chName) ], text), to: client, server: server)
-            } else {
-                sendWithFailureDetection(.otherCommand("PRIVMSG", [ channel.name, text ]), to: client, server: server)
-            }
+            // A failed write ends the connection, which arrives as a .disconnected event.
+            client.send(.privateMessage(to: channel.name, text))
 
         case .privateMessage(let pm):
             let nick = server.currentNick ?? defaultNick
             let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true)
             pm.log.append(msg)
             delegate?.ircConnectionService(self, didAppendMessage: msg, to: server)
-
-            sendWithFailureDetection(.otherCommand("PRIVMSG", [ pm.nickname, text ]), to: client, server: server)
+            client.send(.privateMessage(to: pm.nickname, text))
 
         case .server:
             break
@@ -572,22 +519,6 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
         }
     }
 
-    private func sendWithFailureDetection(_ command: IRCCommand, to client: IRCClient, server: IRCServer) {
-        let message = IRCMessage(command: command)
-        let promise = client.eventLoop.makePromise(of: Void.self)
-
-        promise.futureResult.whenFailure { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                print("⚠️ Write failed for server \(server.name): \(error)")
-                self.handleSendFailure(for: server, reason: "Write failed: \(error.localizedDescription)")
-                self.handleConnectionDead(for: server)
-            }
-        }
-
-        client.sendMessages([message], promise: promise)
-    }
-
     /// Appends a status line to the server log and notifies the delegate — the shared
     /// tail of every "something happened on this connection" message.
     private func logToServer(_ text: String, on server: IRCServer) {
@@ -613,321 +544,103 @@ final class IRCConnectionService: IRCClientDelegate, ReconnectionManagerDelegate
     }
     
     // MARK: - Helper Methods
-    
-    private func serverID(for client: IRCClient) -> UUID? {
-        // O(1), but only resolves the CURRENT client for an id. A stale/old client — e.g. one
-        // replaced by an auto-reconnect — returns nil, so its late event-loop callbacks cannot
-        // clobber the live connection's state. This mirrors the original identity-scan semantics
-        // (which returned nil once a client was no longer a value in `clients`).
-        guard let id = client.serverID, clients[id] === client else { return nil }
-        return id
-    }
 
-    /// Main-thread "is this connection registered?" query that avoids touching
-    /// event-loop-owned IRCClient state.
+    /// Whether the server's connection has completed registration.
     func isRegistered(_ serverID: UUID) -> Bool {
-        dispatchPrecondition(condition: .onQueue(.main))
-        return registeredServerIDs.contains(serverID)
-    }
-    
-    private nonisolated func formatIRCMessage(_ message: IRCMessage, direction: String) -> String {
-        let sender = message.origin ?? "server"
-        switch message.command {
-        case .numeric(let code, let args):
-            let argsText = args.joined(separator: " ")
-            return "\(direction): \(code.rawValue) \(argsText)"
-        case .PRIVMSG(let recipients, let text):
-            let targets = recipients.map(\.description).joined(separator: ",")
-            return "\(direction): \(sender) PRIVMSG \(targets) :\(text)"
-        case .NOTICE(let recipients, let text):
-            let targets = recipients.map(\.description).joined(separator: ",")
-            return "\(direction): \(sender) NOTICE \(targets) :\(text)"
-        case .JOIN(channels: let channels, keys: _):
-            let channelNames = channels.map(\.stringValue).joined(separator: ",")
-            return "\(direction): \(sender) JOIN \(channelNames)"
-        case .PART(channels: let channels, message: let partMessage):
-            let channelNames = channels.map(\.stringValue).joined(separator: ",")
-            let reasonText = partMessage.map { " :\($0)" } ?? ""
-            return "\(direction): \(sender) PART \(channelNames)\(reasonText)"
-        case .QUIT(let reason):
-            let reasonText = reason.map { " :\($0)" } ?? ""
-            return "\(direction): \(sender) QUIT\(reasonText)"
-        case .NICK(let nick):
-            return "\(direction): \(sender) NICK \(nick.stringValue)"
-        case .MODE(let target, add: let add, remove: let remove):
-            return "\(direction): \(sender) MODE \(target.stringValue) +\(add) -\(remove)"
-        case .otherCommand(let command, let args):
-            let argsText = args.joined(separator: " ")
-            return "\(direction): \(sender) \(command) \(argsText)"
-        default:
-            return "\(direction): \(message.command)"
-        }
-    }
-    
-    // MARK: - IRCClientDelegate Implementation
-    //
-    // Delegate callbacks arrive on the NIO event loop. Each one does only the
-    // Sendable-safe work it needs (parsing, formatting) and yields a ClientEvent
-    // into `clientEvents`; a single main-actor task drains the stream in order
-    // and applies the event in `handle(_:from:)`.
-
-    /// Events forwarded from the NIO event loop to the main actor.
-    private enum ClientEvent: Sendable {
-        case disconnected
-        case registered(nick: String)
-        case failedToRegister
-        case connectionStateChanged(IRCClient.ConnectionState)
-        case serverLog(String, time: Date?)
-        case changedNick(String)
-        case message(String, from: IRCUserID, recipients: [IRCMessageRecipient], time: Date?)
-        case joined(nick: String, channels: [String])
-        case left(nick: String, channels: [String])
-        case userChangedNick(from: String, to: String)
-        case userQuit(nick: String, message: String?)
-        case topicChanged(String, channel: String, by: String?)
-        case pong
-        case userList([String], channel: String)
-        case whoReply(nick: String, channel: String)
+        clients[serverID]?.isRegistered ?? false
     }
 
-    private nonisolated let clientEvents = AsyncStream.makeStream(of: (IRCClient, ClientEvent).self)
+    // MARK: - Client Events
 
-    private nonisolated func post(_ event: ClientEvent, from client: IRCClient) {
-        clientEvents.continuation.yield((client, event))
-    }
-
-    /// Drains `clientEvents` on the main actor. Started once from `init`.
-    private func startClientEventLoop() {
-        let events = clientEvents.stream
-        Task { [weak self] in
-            for await (client, event) in events {
-                self?.handle(event, from: client)
-            }
-        }
-    }
-
-    private func handle(_ event: ClientEvent, from client: IRCClient) {
-        guard let serverID = serverID(for: client) else { return }
-
+    /// Applies one event from a server's IRCClient. Clients report on the main actor, in
+    /// order, and go quiet once closed, so every event here is from the live connection.
+    private func handle(_ event: IRCEvent, from client: IRCClient, serverID: UUID) {
         switch event {
-        case .disconnected:
-            // Update server state IMMEDIATELY before any cleanup.
-            // This prevents race conditions where canSendMessage() might check
-            // state between the async dispatch and cleanup completion.
-            if let server = serverLookup?(serverID) {
-                // Only update if we think we're still connected/connecting.
-                // If already in a disconnect-related state, don't overwrite it.
-                if server.connectionStatus == .connected || server.connectionStatus == .connecting {
-                    server.connectionStatus = .disconnected
-                }
-
-                // Mark all channels as not joined
-                for channel in server.channels {
-                    channel.joined = false
-                }
-            }
-
-            // Clean up all monitoring and timers for this server
-            pingTasks.removeValue(forKey: serverID)?.cancel()
-            lastPongReceived.removeValue(forKey: serverID)
-            connectionTimeouts.removeValue(forKey: serverID)?.cancel()
-            reconnectionManager.cancelReconnection(for: serverID)
-
-            // Remove client reference
-            clients.removeValue(forKey: serverID)
-            selfNicks.removeValue(forKey: serverID)
-            registeredServerIDs.remove(serverID)
-
-            // Discard queued messages for this server
-            messageQueue.removeAll { $0.server.id == serverID }
-            if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
-
-            // Notify delegate so it can trigger reconnection if needed
-            delegate?.ircConnectionService(self, serverDidDisconnect: serverID)
+        case .lineReceived(let line):
+            if debugRawServerLog { logServerEvent("RECV: \(line)", for: serverID) }
 
         case .registered(let nick):
-            selfNicks[serverID] = nick
-            registeredServerIDs.insert(serverID)
             delegate?.ircConnectionService(self, serverDidRegister: serverID, as: nick)
 
-        case .failedToRegister:
-            delegate?.ircConnectionService(self, serverFailedToRegister: serverID)
+        case .registrationFailed(let reason):
+            registrationDidFail(for: serverID, reason: reason)
 
-        case .connectionStateChanged(let state):
-            delegate?.ircConnectionService(self, server: serverID, connectionStateChanged: state)
+        case .disconnected(let reason):
+            if client.isRegistered {
+                connectionDidEnd(for: serverID, reason: reason)
+            } else {
+                registrationDidFail(for: serverID, reason: reason)
+            }
 
-        case .serverLog(let text, let time):
-            let m = ChatMessage(time: time ?? Date(), text: text)
-            delegate?.ircConnectionService(self, didReceiveMessage: m, for: serverID, target: .server)
-
-        case .changedNick(let nick):
-            selfNicks[serverID] = nick
+        case .nicknameChanged(let nick):
             delegate?.ircConnectionService(self, serverDidChangeNick: serverID, to: nick)
 
-        case .message(let message, let user, let recipients, let serverTime):
-            // Use server-time if available (for ZNC backlog), otherwise use current time
-            let time = serverTime ?? Date()
-
-            for r in recipients {
-                if case .channel(let chName) = r {
-                    let name = chName.stringValue
-                    let selfNick = selfNicks[serverID]
-                    let isMine = selfNick.map { user.nick.stringValue.caseInsensitiveCompare($0) == .orderedSame } ?? false
-                    let isHighlight = !isMine && selfNick.map { Formatting.mentionsNick($0, in: message) } ?? false
-                    let m = ChatMessage(time: time, text: message, senderNick: user.nick.stringValue, isPrivmsg: true, isFromMe: isMine, isHighlight: isHighlight)
-                    delegate?.ircConnectionService(self, didReceiveMessage: m, for: serverID, target: .channel(name, isMine: isMine))
-                } else if case .nickname(let targetNick) = r {
-                    let selfNick = selfNicks[serverID] ?? ""
-                    let senderIsSelf = user.nick.stringValue.compare(selfNick, options: .caseInsensitive) == .orderedSame
-                    let targetIsSelf = targetNick.stringValue.compare(selfNick, options: .caseInsensitive) == .orderedSame
-
-                    if targetIsSelf {
-                        // Incoming PM: someone else is messaging us
-                        // Target window = sender's nick
-                        let senderNick = user.nick.stringValue
-                        let isHighlight = !selfNick.isEmpty && Formatting.mentionsNick(selfNick, in: message)
-                        let m = ChatMessage(time: time, text: message, senderNick: senderNick, isPrivmsg: true, isFromMe: false, isHighlight: isHighlight)
-                        delegate?.ircConnectionService(self, didReceiveMessage: m, for: serverID, target: .privateMessage(senderNick))
-                    } else if senderIsSelf {
-                        // Self-message: we sent this PM (from ZNC buffer playback)
-                        // Target window = recipient's nick
-                        let m = ChatMessage(time: time, text: message, senderNick: selfNick, isPrivmsg: true, isFromMe: true)
-                        delegate?.ircConnectionService(self, didReceiveMessage: m, for: serverID, target: .privateMessage(targetNick.stringValue))
-                    }
-                }
-            }
-
-        case .joined(let nick, let channels):
-            for name in channels {
-                // IRC nicks are case-insensitive; servers/bouncers may echo ours with
-                // different casing, so an exact == would misclassify our own JOIN.
-                let isSelf = selfNicks[serverID]?.compare(nick, options: .caseInsensitive) == .orderedSame
-                delegate?.ircConnectionService(self, user: nick, joinedChannel: name, on: serverID, isSelf: isSelf)
-
-                if isSelf, let client = clients[serverID] {
-                    client.send(.otherCommand("NAMES", [ name ]))
-                    client.send(.otherCommand("WHO",   [ name ]))
-                }
-            }
-
-        case .left(let nick, let channels):
-            for name in channels {
-                let isSelf = selfNicks[serverID]?.compare(nick, options: .caseInsensitive) == .orderedSame
-                delegate?.ircConnectionService(self, user: nick, leftChannel: name, on: serverID, isSelf: isSelf)
-            }
-
-        case .userChangedNick(let oldNick, let newNick):
-            delegate?.ircConnectionService(self, user: oldNick, changedNickTo: newNick, on: serverID)
-
-        case .userQuit(let nick, let message):
-            delegate?.ircConnectionService(self, userQuit: nick, on: serverID, message: message)
-
-        case .topicChanged(let topic, let channel, let nick):
-            delegate?.ircConnectionService(self, didReceiveTopicChange: topic, for: channel, on: serverID, changedBy: nick)
+        case .messageOfTheDay(let text):
+            logServerEvent("MOTD:\n\(text)", for: serverID)
 
         case .pong:
             lastPongReceived[serverID] = .now
 
-        case .userList(let names, let channel):
-            delegate?.ircConnectionService(self, didReceiveUserList: names, for: channel, on: serverID)
+        // Server time, when present, dates bouncer backlog to when it was originally sent.
+        case .channelMessage(let channel, let sender, let text, let isOwn, let time):
+            let isHighlight = !isOwn && Formatting.mentionsNick(client.nickname, in: text)
+            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight)
+            delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .channel(channel, isMine: isOwn))
 
-        case .whoReply(let nick, let channel):
+        case .privateMessage(let peer, let sender, let text, let isOwn, let time):
+            let isHighlight = !isOwn && Formatting.mentionsNick(client.nickname, in: text)
+            let message = ChatMessage(time: time ?? Date(), text: text, senderNick: sender, isPrivmsg: true, isFromMe: isOwn, isHighlight: isHighlight)
+            delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .privateMessage(peer))
+
+        case .notice(let text, let time):
+            logServerEvent("NOTICE: \(text)", time: time, for: serverID)
+
+        case .joined(let channel, let nick, let isSelf):
+            delegate?.ircConnectionService(self, user: nick, joinedChannel: channel, on: serverID, isSelf: isSelf)
+            if isSelf {
+                client.send(.names(channel))
+                client.send(.who(channel))
+            }
+
+        case .parted(let channel, let nick, let isSelf):
+            delegate?.ircConnectionService(self, user: nick, leftChannel: channel, on: serverID, isSelf: isSelf)
+
+        case .quit(let nick, let reason):
+            delegate?.ircConnectionService(self, userQuit: nick, on: serverID, message: reason)
+
+        case .nickChanged(let oldNick, let newNick):
+            delegate?.ircConnectionService(self, user: oldNick, changedNickTo: newNick, on: serverID)
+
+        case .topic(let channel, let topic, let setBy):
+            delegate?.ircConnectionService(self, didReceiveTopicChange: topic, for: channel, on: serverID, changedBy: setBy)
+
+        case .names(let channel, let nicks):
+            delegate?.ircConnectionService(self, didReceiveUserList: nicks, for: channel, on: serverID)
+
+        case .whoReply(let channel, let nick):
             delegate?.ircConnectionService(self, didReceiveWhoReply: nick, for: channel, on: serverID)
         }
     }
 
-    nonisolated func clientDidDisconnect(_ client: IRCClient) {
-        post(.disconnected, from: client)
+    /// A server-log line reporting something the server said.
+    private func logServerEvent(_ text: String, time: Date? = nil, for serverID: UUID) {
+        let message = ChatMessage(time: time ?? Date(), text: text)
+        delegate?.ircConnectionService(self, didReceiveMessage: message, for: serverID, target: .server)
     }
 
-    nonisolated func client(_ client: IRCClient, registered nick: IRCNickName, with userInfo: IRCUserInfo) {
-        post(.registered(nick: nick.stringValue), from: client)
+    /// A registered connection ended: tidy up, and let the delegate decide about reconnecting.
+    private func connectionDidEnd(for serverID: UUID, reason: String) {
+        tearDownConnection(for: serverID)
+        messageQueue.removeAll { $0.server.id == serverID }
+        if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
+        delegate?.ircConnectionService(self, serverDidDisconnect: serverID, reason: reason)
     }
 
-    nonisolated func clientFailedToRegister(_ client: IRCClient) {
-        post(.failedToRegister, from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, connectionStateChanged state: IRCClient.ConnectionState) {
-        post(.connectionStateChanged(state), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, messageOfTheDay: String) {
-        post(.serverLog("MOTD:\n\(messageOfTheDay)", time: nil), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, changedNickTo nick: IRCNickName) {
-        post(.changedNick(nick.stringValue), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, notice message: String, for recipients: [IRCMessageRecipient], serverTime: Date?) {
-        // Use server-time if available (for ZNC backlog), otherwise use current time
-        post(.serverLog("NOTICE: \(message)", time: serverTime), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, message: String, from user: IRCUserID, for recipients: [IRCMessageRecipient], serverTime: Date?) {
-        post(.message(message, from: user, recipients: recipients, time: serverTime), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, user: IRCUserID, joined channels: [IRCChannelName]) {
-        post(.joined(nick: user.nick.stringValue, channels: channels.map(\.stringValue)), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, user: IRCUserID, left channels: [IRCChannelName], with msg: String?) {
-        post(.left(nick: user.nick.stringValue, channels: channels.map(\.stringValue)), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, user: IRCUserID, changedNickTo newNick: IRCNickName) {
-        post(.userChangedNick(from: user.nick.stringValue, to: newNick.stringValue), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, userQuit user: IRCUserID, message: String?) {
-        post(.userQuit(nick: user.nick.stringValue, message: message), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, changeTopic topic: String, of channel: IRCChannelName) {
-        post(.topicChanged(topic, channel: channel.stringValue, by: nil), from: client)
-    }
-
-    nonisolated func client(_ client: IRCClient, received message: IRCMessage) {
-        if debugRawServerLogFlag.load(ordering: .relaxed) {
-            post(.serverLog(formatIRCMessage(message, direction: "RECV"), time: nil), from: client)
-        }
-
-        switch message.command {
-        case .PRIVMSG(let recipients, _)
-            where recipients.contains(where: { if case .channel = $0 { true } else { false } }):
-            // Channel messages are delivered via client(_:message:from:for:serverTime:).
-            return
-        case .PONG:
-            post(.pong, from: client)
-        case .CAP(let subcmd, let capIDs):
-            post(.serverLog("CAP \(subcmd.rawValue): \(capIDs.joined(separator: " "))", time: nil), from: client)
-        case .numeric(.replyNameReply, let args):
-            guard !args.isEmpty else { return }
-            let channelName = args.first(where: { $0.hasPrefix("#") }) ?? (args.count > 2 ? args[2] : "")
-            let namesList = args.last ?? ""
-            let cleaned = namesList.split(separator: " ").map { name in
-                // Drop a leading channel-status prefix (op, voice, …).
-                String(name.first.map { "@+~&%".contains($0) } == true ? name.dropFirst() : name)
-            }
-            post(.userList(cleaned, channel: channelName), from: client)
-        case .otherCommand("TOPIC", let args):
-            // Live topic change: :nick!user@host TOPIC #channel :new topic
-            guard args.count >= 2 else { break }
-            let channelName = args[0]
-            let newTopic = args[1]
-            // origin is "nick!user@host" — extract nick
-            let nick = message.origin.map { String($0.prefix { $0 != "!" }) }
-            post(.topicChanged(newTopic, channel: channelName, by: nick), from: client)
-        case .numeric(.replyWhoReply, let args):
-            let channelName = args.first(where: { $0.hasPrefix("#") }) ?? (args.count > 1 ? args[1] : "")
-            let nick = args.count > 5 ? args[5] : ""
-            guard !channelName.isEmpty, !nick.isEmpty else { return }
-            post(.whoReply(nick: nick, channel: channelName), from: client)
-        default:
-            break
-        }
+    /// The connection ended before registration completed: it was refused, cut off, or
+    /// turned down by the server.
+    private func registrationDidFail(for serverID: UUID, reason: String) {
+        tearDownConnection(for: serverID)
+        delegate?.ircConnectionService(self, serverFailedToRegister: serverID, reason: reason)
     }
 }
 
@@ -947,11 +660,10 @@ enum MessageTargetType {
 
 protocol IRCConnectionServiceDelegate: AnyObject {
     func ircConnectionService(_ service: IRCConnectionService, didAppendMessage message: ChatMessage, to server: IRCServer)
-    func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID)
+    func ircConnectionService(_ service: IRCConnectionService, serverDidDisconnect serverID: UUID, reason: String)
     func ircConnectionServiceNetworkDidBecomeAvailable(_ service: IRCConnectionService)
     func ircConnectionService(_ service: IRCConnectionService, serverDidRegister serverID: UUID, as nick: String)
-    func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID)
-    func ircConnectionService(_ service: IRCConnectionService, server serverID: UUID, connectionStateChanged state: IRCClient.ConnectionState)
+    func ircConnectionService(_ service: IRCConnectionService, serverFailedToRegister serverID: UUID, reason: String)
     func ircConnectionService(_ service: IRCConnectionService, serverDidChangeNick serverID: UUID, to nick: String)
     func ircConnectionService(_ service: IRCConnectionService, didReceiveMessage message: ChatMessage, for serverID: UUID, target: MessageTargetType)
     func ircConnectionService(_ service: IRCConnectionService, user nick: String, joinedChannel channel: String, on serverID: UUID, isSelf: Bool)

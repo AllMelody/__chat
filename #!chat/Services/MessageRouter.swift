@@ -107,8 +107,8 @@ final class MessageRouter {
         case .nick(let newNickRaw):
             guard let s = serverForSelection(selection) else { log("No active server."); return }
             guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
-            if let nn = IRCNickName(newNickRaw) {
-                client.changeNick(nn)
+            if IRCName.isValidNickname(newNickRaw) {
+                client.send(.nick(newNickRaw))
                 // Don't update currentNick optimistically - wait for server confirmation
                 log("Attempting to change nick to \(newNickRaw)...")
             } else { log("Invalid nickname.") }
@@ -124,17 +124,13 @@ final class MessageRouter {
         case .names:
             guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to list names."); return }
             guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
-            client.send(.otherCommand("NAMES", [ ch.name ]))
+            client.send(.names(ch.name))
 
         case .topic(let newTopic):
             guard let (s, ch) = channelForSelection(selection) else { log("Select a channel to set or view the topic."); return }
             guard let client = connectionService.clients[s.id], connectionService.isRegistered(s.id) else { log("Not connected."); return }
-            if let newTopic {
-                client.send(.otherCommand("TOPIC", [ch.name, newTopic]))
-            } else {
-                // /topic with no args — request current topic from server
-                client.send(.otherCommand("TOPIC", [ch.name]))
-            }
+            // With no new topic, this asks the server for the current one.
+            client.send(.topic(ch.name, newTopic))
 
         case .usage(let cmd):
             switch cmd {

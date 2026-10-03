@@ -1012,7 +1012,7 @@ struct ServerFormView: View {
     @State private var nickname: String = ""
     private var validPort: Int? { Int(port).flatMap { (1...65535).contains($0) ? $0 : nil } }
     private var trimmedNick: String { nickname.trimmingCharacters(in: .whitespaces) }
-    private var nickIsValid: Bool { trimmedNick.isEmpty || IRCNickName(trimmedNick) != nil }
+    private var nickIsValid: Bool { trimmedNick.isEmpty || IRCName.isValidNickname(trimmedNick) }
     private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil && nickIsValid }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

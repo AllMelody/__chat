@@ -6,12 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		CE86447A2E6377930097418A /* NIO in Frameworks */ = {isa = PBXBuildFile; productRef = CE1234567890ABCD /* NIO */; };
-		CE86447B2E6377930097418A /* NIOTransportServices in Frameworks */ = {isa = PBXBuildFile; productRef = CE1234567890ABCE /* NIOTransportServices */; };
-		CECA07D82E63821800308DC6 /* NIOSSL in Frameworks */ = {isa = PBXBuildFile; productRef = CECA07D72E63821800308DC6 /* NIOSSL */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		DD000000000000000000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -45,9 +39,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CE86447B2E6377930097418A /* NIOTransportServices in Frameworks */,
-				CE86447A2E6377930097418A /* NIO in Frameworks */,
-				CECA07D82E63821800308DC6 /* NIOSSL in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,9 +90,6 @@
 			);
 			name = "#!chat";
 			packageProductDependencies = (
-				CE1234567890ABCD /* NIO */,
-				CE1234567890ABCE /* NIOTransportServices */,
-				CECA07D72E63821800308DC6 /* NIOSSL */,
 			);
 			productName = "#!chat";
 			productReference = CEA622A42E458CD60008C2B0 /* #!chat.app */;
@@ -158,11 +146,6 @@
 			);
 			mainGroup = CEA6229B2E458CD60008C2B0;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				CE1111111111AAAA /* XCRemoteSwiftPackageReference "swift-nio" */,
-				CE1111111111AAAB /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */,
-				CECA07D62E63821800308DC6 /* XCRemoteSwiftPackageReference "swift-nio-ssl" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CEA622A52E458CD60008C2B0 /* Products */;
 			projectDirPath = "";
@@ -494,51 +477,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		CE1111111111AAAA /* XCRemoteSwiftPackageReference "swift-nio" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-nio.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.68.0;
-			};
-		};
-		CE1111111111AAAB /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-nio-transport-services.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.21.0;
-			};
-		};
-		CECA07D62E63821800308DC6 /* XCRemoteSwiftPackageReference "swift-nio-ssl" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-nio-ssl";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.33.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		CE1234567890ABCD /* NIO */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = CE1111111111AAAA /* XCRemoteSwiftPackageReference "swift-nio" */;
-			productName = NIO;
-		};
-		CE1234567890ABCE /* NIOTransportServices */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = CE1111111111AAAB /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */;
-			productName = NIOTransportServices;
-		};
-		CECA07D72E63821800308DC6 /* NIOSSL */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = CECA07D62E63821800308DC6 /* XCRemoteSwiftPackageReference "swift-nio-ssl" */;
-			productName = NIOSSL;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = CEA6229C2E458CD60008C2B0 /* Project object */;
 }

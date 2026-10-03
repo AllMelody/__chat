@@ -30,7 +30,7 @@ struct HighlightTests {
         ("AllMelody", "AllMelodyFan joined the channel"), // substring of a longer word
         ("AllMelody", "AllMelody_: hello"),               // '_' suffix: somebody else
         ("AllMelody", "_AllMelody says hi"),              // nick-char prefix
-        ("Mel", "[Mel] is not Mel"),
+        ("Mel", "[Mel] is someone else"),                 // '[' ']' are nick chars: a different nick
         ("AllMelody", "nothing to see here"),
         ("", "anything"),                                 // empty inputs
         ("AllMelody", ""),

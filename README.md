@@ -1,6 +1,6 @@
 # #!chat
 
-A native macOS IRC client built with SwiftUI and SwiftNIO.
+A native macOS IRC client built with SwiftUI and Network.framework.
 
 ## Features
 
@@ -16,14 +16,14 @@ A native macOS IRC client built with SwiftUI and SwiftNIO.
 
 ## Building
 
-Open `#!chat.xcodeproj` in Xcode 16+ and Run. Dependencies resolve via Swift Package Manager.
+Open `#!chat.xcodeproj` in Xcode 26+ and Run. There are no third-party dependencies.
 
 ## Notes
 
-- Heavily inspired by, basically a ripoff of, [LimeChat](https://github.com/psychs/limechat) by Satoshi Nakagawa.
-- The `#!chat/IRC/NIOIRC` engine is a partial rewrite of swift-nio-irc by ZeeZide GmbH (Apache-2.0); those files keep their original headers.
+- Heavily inspired by [LimeChat](https://github.com/psychs/limechat) by Satoshi Nakagawa.
+- Earlier versions ran on an IRC engine adapted from swift-nio-irc by ZeeZide GmbH. Thanks to its authors; `#!chat/IRC` has since been rewritten from scratch.
 - Almost all of the code was written by Claude by Anthropic.
 
 ## License
 
-MIT © 2026 All Melody — see [LICENSE](LICENSE). The `IRC/NIOIRC` sources remain Apache-2.0.
+MIT © 2026 All Melody — see [LICENSE](LICENSE).
