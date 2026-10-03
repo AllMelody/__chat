@@ -1,8 +1,11 @@
 import Foundation
 import AppKit
 import CryptoKit
+import os
 
 final class ImageCacheService {
+    private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ImageCache")
+
     // In-memory thumbnails keyed by ChatMessage.id
     private var messageThumbnails: [UUID: [MessageThumbnail]] = [:]
 
@@ -76,11 +79,11 @@ final class ImageCacheService {
                 }
 
                 if prunedCount > 0 {
-                    print("Pruned \(prunedCount) old image cache files")
+                    Self.logger.info("Pruned \(prunedCount) old image cache files")
                 }
             } catch {
                 // Cache pruning is best-effort, don't crash on errors
-                print("Cache pruning error: \(error)")
+                Self.logger.error("Cache pruning failed: \(String(describing: error))")
             }
         }
     }
@@ -234,7 +237,7 @@ final class ImageCacheService {
                 (_, resp) = try await URLSession.shared.data(for: req)
             } catch {
                 // Unreachable links are expected in chat; log and skip the thumbnail.
-                print("HEAD request failed for \(urlString): \(error)")
+                Self.logger.info("HEAD request failed for \(urlString): \(String(describing: error))")
                 return
             }
             guard let self else { return }
@@ -267,7 +270,7 @@ final class ImageCacheService {
                 (data, _) = try await URLSession.shared.data(for: request)
             } catch {
                 // Unreachable images are expected in chat; log and skip the thumbnail.
-                print("Image fetch failed for \(urlString): \(error)")
+                Self.logger.info("Image fetch failed for \(urlString): \(String(describing: error))")
                 return
             }
 

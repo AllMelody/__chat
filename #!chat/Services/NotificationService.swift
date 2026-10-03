@@ -1,4 +1,5 @@
 import AppKit
+import os
 import UserNotifications
 
 /// Posts macOS user notifications for nick highlights and routes notification clicks
@@ -13,12 +14,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     var onSelectNode: ((UUID) -> Void)?
 
     private let center = UNUserNotificationCenter.current()
+    private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Notifications")
 
     override init() {
         super.init()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, error in
-            if let error { print("⚠️ Notification authorization failed: \(error)") }
+            if let error { Self.logger.error("Notification authorization failed: \(String(describing: error))") }
         }
     }
 
@@ -31,7 +33,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         content.userInfo = ["nodeID": nodeID.uuidString]
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         center.add(request) { error in
-            if let error { print("⚠️ Failed to post highlight notification: \(error)") }
+            if let error { Self.logger.error("Failed to post highlight notification: \(String(describing: error))") }
         }
     }
 
