@@ -607,6 +607,14 @@ private struct LogTextView: NSViewRepresentable {
         guard let storage = textView.textStorage else { return }
         let newIDs = messages.map { $0.id }
         let prior = coordinator.lastRenderedIDs
+        let renderedThumbnailsAreCurrent = prior.allSatisfy {
+            coordinator.renderedThumbFingerprints[$0] == thumbnailFingerprint(for: $0)
+        }
+
+        // logVersion bumps for every log in the app, so most updates come from some other
+        // conversation. When nothing shown here changed, keep the storage — rebuilding it would
+        // also throw away the user's text selection.
+        if !forceFullRebuild && newIDs == prior && renderedThumbnailsAreCurrent { return }
 
         // Append-fast-path is valid ONLY when the new list is a pure suffix-append of what we
         // already rendered (identical prefix, strictly more at the end) AND no already-rendered
@@ -616,7 +624,7 @@ private struct LogTextView: NSViewRepresentable {
         let canAppend = !forceFullRebuild
             && newIDs.count > prior.count
             && newIDs.starts(with: prior)
-            && prior.allSatisfy { coordinator.renderedThumbFingerprints[$0] == thumbnailFingerprint(for: $0) }
+            && renderedThumbnailsAreCurrent
 
         if canAppend {
             let appended = NSMutableAttributedString()
