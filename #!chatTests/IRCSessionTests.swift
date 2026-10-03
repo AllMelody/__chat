@@ -204,7 +204,7 @@ struct IRCSessionTests {
         var session = session()
         #expect(session.handle(line(":bob!u@h PRIVMSG Alice :psst")).events ==
                 [.privateMessage(peer: "bob", sender: "bob", text: "psst", isOwn: false, time: nil)])
-        // Our own message to bob, echoed back by a bouncer (znc.in/self-message).
+        // Our own message to bob, sent from another client on the same bouncer (znc.in/self-message).
         #expect(session.handle(line(":alice!u@h PRIVMSG bob :hey")).events ==
                 [.privateMessage(peer: "bob", sender: "alice", text: "hey", isOwn: true, time: nil)])
         // ZNC modules talk from names that aren't valid nicknames.

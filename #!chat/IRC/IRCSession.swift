@@ -147,8 +147,9 @@ nonisolated struct IRCSession {
         }
     }
 
-    /// Timestamps for replayed history (`server-time`, or ZNC's older name for it) and our
-    /// own messages echoed back from a bouncer (`znc.in/self-message`).
+    /// Timestamps for replayed history (`server-time`, or ZNC's older name for it), and the
+    /// private messages we send from our other clients on the same bouncer
+    /// (`znc.in/self-message`). Not `echo-message`: the app shows its own lines as it sends them.
     private static func capabilitiesToRequest(from offered: Set<String>) -> [String] {
         let serverTime = ["server-time", "znc.in/server-time-iso"].first(where: offered.contains)
         let selfMessage = offered.contains("znc.in/self-message") ? "znc.in/self-message" : nil

@@ -27,11 +27,12 @@ nonisolated enum IRCEvent: Equatable, Sendable {
 
     // MARK: Messages
 
-    /// A PRIVMSG to a channel. `isOwn` marks our own message, echoed back by the server.
+    /// A PRIVMSG to a channel. `isOwn` marks one we sent from another client sharing our
+    /// bouncer connection, or one in replayed backlog; lines this client sends never come back.
     case channelMessage(channel: String, sender: String, text: String, isOwn: Bool, time: Date?)
-    /// A PRIVMSG in a private conversation with `peer`. That's the sender of a message to
-    /// us, or the recipient of our own message to someone else when the server echoes it
-    /// back (`isOwn`).
+    /// A PRIVMSG in a private conversation with `peer`: the sender of a message to us, or the
+    /// recipient of one we sent from another client (`isOwn`, relayed by a bouncer thanks to
+    /// znc.in/self-message).
     case privateMessage(peer: String, sender: String, text: String, isOwn: Bool, time: Date?)
     case notice(text: String, time: Date?)
 

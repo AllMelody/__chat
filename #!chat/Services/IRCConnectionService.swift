@@ -454,10 +454,11 @@ final class IRCConnectionService: ReconnectionManagerDelegate {
             return
         }
 
+        // Show our own line right away: the server never sends it back to us, because we
+        // don't request IRCv3 echo-message. (znc.in/self-message is something else: it makes
+        // a bouncer relay what we send from our *other* clients, which arrives as isOwn.)
         switch target {
         case .channel(let channel):
-            // Echo locally so the user sees their message immediately. Servers that advertise
-            // znc.in/self-message also echo it back; that echo is de-duplicated in ChatStore.
             let nick = server.currentNick ?? defaultNick
             let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true)
             channel.log.append(msg)

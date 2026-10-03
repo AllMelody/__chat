@@ -463,22 +463,14 @@ final class ChatStore: IRCConnectionServiceDelegate, MessageRouterDelegate {
         case .server:
             server.log.append(message)
 
+        // Nothing to de-duplicate: lines this client sends never come back from the server
+        // (see IRCConnectionService.sendSingleLine); isMine ones were sent from elsewhere.
         case .channel(let name, let isMine):
             let channel = server.getOrCreateChannel(named: name)
-
-            // Drop an immediate server echo of a line we just echoed locally (servers with
-            // znc.in/self-message echo our own PRIVMSGs back). Heuristic: same sender+text as
-            // the last entry within 1s. Buffer playback on reconnect arrives in a burst with no
-            // matching just-appended local line, so it is not affected.
-            let isDuplicate = channel.log.last?.senderNick == message.senderNick &&
-                            channel.log.last?.text == message.text &&
-                            Date().timeIntervalSince(channel.log.last?.time ?? Date.distantPast) < 1.0
-            if !isDuplicate {
-                channel.log.append(message)
-                scanMessageForThumbnails(message)
-                if message.isHighlight {
-                    notifyHighlight(for: message, conversation: channel.name, serverName: server.name, nodeID: channel.id)
-                }
+            channel.log.append(message)
+            scanMessageForThumbnails(message)
+            if message.isHighlight {
+                notifyHighlight(for: message, conversation: channel.name, serverName: server.name, nodeID: channel.id)
             }
 
             if !isMine, selectedNodeID != channel.id {
