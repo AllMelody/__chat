@@ -144,6 +144,13 @@ struct IRCSessionTests {
         #expect(session.handle(line(":srv PONG srv :1759500000.123")).events == [.pong])
     }
 
+    @Test func `Remembers why the server is closing the connection`() {
+        var session = session()
+        #expect(session.closingReason == nil)
+        #expect(session.handle(line("ERROR :Closing Link: 203.0.113.7 (Excess Flood)")) == .init())
+        #expect(session.closingReason == "Closing Link: 203.0.113.7 (Excess Flood)")
+    }
+
     // MARK: - Message of the day
 
     @Test func `Collects the message of the day`() {

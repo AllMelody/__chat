@@ -59,6 +59,20 @@ struct IRCClientTests {
         #expect(client.nickname == "alice_")
     }
 
+    @Test func `The server's ERROR message explains the disconnect`() async throws {
+        let server = try await FakeIRCServer()
+        let (client, events) = makeClient(port: server.port)
+        client.connect()
+        try await server.accept()
+        _ = try await server.lines(3)
+
+        server.send("ERROR :Closing Link: 127.0.0.1 (K-Lined)")
+        server.send("PING :sync")
+        #expect(try await server.nextLine() == "PONG sync")   // the client has read the ERROR
+        server.hangUp()
+        #expect(await events.next() == .disconnected(reason: "Closing Link: 127.0.0.1 (K-Lined)"))
+    }
+
     @Test func `Quit says goodbye before hanging up`() async throws {
         let server = try await FakeIRCServer()
         let (client, _) = makeClient(port: server.port)

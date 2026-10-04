@@ -101,11 +101,12 @@ final class IRCClient {
     }
 
     /// Ends the connection on its own terms (refused, dropped, closed by the server, failed
-    /// write) and reports it, unless the app already closed it.
+    /// write) and reports it, unless the app already closed it. The server's own explanation,
+    /// when it gave one, beats what the socket saw.
     private func finish(reason: String) {
         guard !isClosed else { return }
         close()
-        onEvent(.disconnected(reason: reason))
+        onEvent(.disconnected(reason: session.closingReason ?? reason))
     }
 
     private static func encode(_ message: IRCMessage) -> Data {

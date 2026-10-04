@@ -16,6 +16,8 @@ nonisolated struct IRCSession {
     /// Our nickname: the one we asked for until the server confirms or changes it.
     private(set) var nickname: String
     private(set) var isRegistered = false
+    /// Why the server is closing the connection, once it has said so (its ERROR message).
+    private(set) var closingReason: String?
 
     private let preferredNickname: String
     private let password: String?
@@ -58,6 +60,9 @@ nonisolated struct IRCSession {
             return Output(events: [.pong])
         case "CAP":
             return Output(replies: negotiateCapabilities(parameters))
+        case "ERROR":
+            closingReason = parameters.last
+            return Output()
 
         case "001": // RPL_WELCOME <nick> :<text>
             guard !isRegistered else { return Output() }
