@@ -193,16 +193,16 @@ private struct ComposerTextField: NSViewRepresentable {
     let focusRequest: Int
     let onSubmit: () -> Void
 
-    /// The display string shown in the text field: newlines replaced with a literal ` \n `
-    /// so the field stays one line. The binding `text` keeps the real newlines for sending.
-    private static let newlineSymbol = " \\n "
+    /// Newlines show as this symbol, so the field stays one line; the binding `text` keeps the
+    /// real newlines for sending. Unlike the `\n` it stands for, nobody types it.
+    private static let newlineSymbol: Character = "⏎"
     private static let newlineSymbolColor = NSColor.secondaryLabelColor
 
     private static func flatten(_ s: String) -> String {
-        s.replacingOccurrences(of: "\n", with: newlineSymbol)
+        String(s.map { $0.isNewline ? newlineSymbol : $0 })
     }
     private static func unflatten(_ s: String) -> String {
-        s.replacingOccurrences(of: newlineSymbol, with: "\n")
+        String(s.map { $0 == newlineSymbol ? "\n" : $0 })
     }
 
     /// Colorizes newline symbols in the field editor's text storage.
@@ -215,16 +215,41 @@ private struct ComposerTextField: NSViewRepresentable {
         storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
         // Color each newline symbol
         let text = storage.string
-        for range in text.ranges(of: newlineSymbol) {
+        for range in text.ranges(of: String(newlineSymbol)) {
             storage.addAttribute(.foregroundColor, value: newlineSymbolColor, range: NSRange(range, in: text))
+        }
+    }
+
+    /// The text field. In single-line mode, which keeps the placeholder from shifting, AppKit
+    /// pastes newlines as spaces; so its cell hands out a field editor of our own that pastes
+    /// them as symbols instead.
+    final class Field: NSTextField {
+        override class var cellClass: AnyClass? {
+            get { Cell.self }
+            set {}
+        }
+    }
+
+    final class Cell: NSTextFieldCell {
+        private let editor: FieldEditor = {
+            let editor = FieldEditor()
+            editor.isFieldEditor = true
+            return editor
+        }()
+
+        override func fieldEditor(for controlView: NSView) -> NSTextView? { editor }
+    }
+
+    final class FieldEditor: NSTextView {
+        override func paste(_ sender: Any?) {
+            guard let pasted = NSPasteboard.general.string(forType: .string) else { return super.paste(sender) }
+            insertText(ComposerTextField.flatten(pasted), replacementRange: selectedRange())
         }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerTextField
         var lastFocusRequest: Int
-        /// Guard against re-entrant updates while we're adjusting the field value.
-        var isSyncing = false
 
         init(_ parent: ComposerTextField) {
             self.parent = parent
@@ -232,27 +257,11 @@ private struct ComposerTextField: NSViewRepresentable {
         }
 
         func controlTextDidChange(_ obj: Notification) {
-            guard !isSyncing, let tf = obj.object as? NSTextField else { return }
-            isSyncing = true
-            defer { isSyncing = false }
-
-            let raw = tf.stringValue
-            // If the user pasted newlines, flatten them for display with colored symbols
-            if raw.contains("\n") {
-                let flat = ComposerTextField.flatten(raw)
-                tf.stringValue = flat
+            guard let tf = obj.object as? NSTextField else { return }
+            parent.text = ComposerTextField.unflatten(tf.stringValue)
+            // After every change, so text typed next to a symbol doesn't take its color.
+            if tf.stringValue.contains(ComposerTextField.newlineSymbol) {
                 ComposerTextField.colorizeNewlineSymbols(in: tf)
-                if let editor = tf.currentEditor() {
-                    // NSRange is UTF-16 based; String.count is off once the text has emoji.
-                    editor.selectedRange = NSRange(location: (flat as NSString).length, length: 0)
-                }
-                parent.text = raw
-            } else {
-                parent.text = ComposerTextField.unflatten(raw)
-                // Re-colorize if symbols present (user typed near a symbol, colors may bleed)
-                if raw.contains(ComposerTextField.newlineSymbol) {
-                    ComposerTextField.colorizeNewlineSymbols(in: tf)
-                }
             }
         }
 
@@ -268,7 +277,7 @@ private struct ComposerTextField: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSTextField {
-        let tf = NSTextField()
+        let tf = Field()
         tf.isBordered = false
         tf.drawsBackground = false
         tf.focusRingType = .none
@@ -304,7 +313,6 @@ private struct ComposerTextField: NSViewRepresentable {
             context.coordinator.lastFocusRequest = focusRequest
             tf.window?.makeFirstResponder(tf)
         }
-        guard !context.coordinator.isSyncing else { return }
         let flat = Self.flatten(text)
         if tf.stringValue != flat {
             tf.stringValue = flat
