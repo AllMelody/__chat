@@ -34,7 +34,7 @@ enum MessageRouter {
             guard let name = parts.first else { return .usage("join") }
             return .join(channel: channelName(name), key: parts.count >= 2 ? parts[1] : nil)
         case "part":
-            return .part(target: parts.first.map(channelName))
+            return .part(target: parts.first.map { channelName($0) })
         case "nick":
             guard let n = parts.first else { return .usage("nick") }
             return .nick(n)
