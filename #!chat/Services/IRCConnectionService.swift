@@ -258,9 +258,7 @@ final class IRCConnectionService {
         stopPingMonitoring(for: server)
         
         clients.removeValue(forKey: server.id)?.quit()
-        messageQueue.removeAll { $0.server.id == server.id }
-        if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
-        server.channels.removeAll()
+        removeQueuedLines { $0.server.id == server.id }
         server.connectionStatus = .disconnected
         server.displayAttempt = 0
         server.shouldAutoReconnect = false
@@ -410,20 +408,9 @@ final class IRCConnectionService {
         _ = server.getOrCreateChannel(named: name)
     }
 
-    func partChannel(_ channel: IRCChannel, from server: IRCServer) {
-        guard let client = clients[server.id] else {
-            handleSendFailure(for: server, reason: "Cannot part channel: Not connected")
-            return
-        }
-
-        guard isRegistered(server.id) else {
-            handleSendFailure(for: server, reason: "Cannot part channel: Not registered")
-            return
-        }
-
-        client.send(.part(channel.name))
-        server.channels.removeAll { $0.id == channel.id }
-        // "Parted X" is logged once, by ChatStore, when the server confirms the PART.
+    /// Takes us out of a channel. The server confirms with a PART of our own.
+    func partChannel(named name: String, on server: IRCServer) {
+        clients[server.id]?.send(.part(name))
     }
     
     // MARK: - Topic
@@ -518,6 +505,16 @@ final class IRCConnectionService {
                 }
             }
         }
+    }
+
+    /// Forgets lines still waiting to go to a conversation that's being closed.
+    func cancelQueuedLines(to conversationID: UUID) {
+        removeQueuedLines { $0.target.id == conversationID }
+    }
+
+    private func removeQueuedLines(where shouldRemove: (QueuedLine) -> Bool) {
+        messageQueue.removeAll(where: shouldRemove)
+        if messageQueue.isEmpty { clearMessageQueue() }
     }
 
     private func drainQueue() {
@@ -669,8 +666,7 @@ final class IRCConnectionService {
     /// A registered connection ended: tidy up, and let the owner decide about reconnecting.
     private func connectionDidEnd(for serverID: UUID, reason: String) {
         tearDownConnection(for: serverID)
-        messageQueue.removeAll { $0.server.id == serverID }
-        if messageQueue.isEmpty { queueTask?.cancel(); queueTask = nil }
+        removeQueuedLines { $0.server.id == serverID }
         report(.disconnected(reason: reason), for: serverID)
     }
 
@@ -694,6 +690,14 @@ enum MessageTarget {
         switch self {
         case .channel(let channel): channel.name
         case .privateMessage(let pm): pm.nickname
+        }
+    }
+
+    /// The conversation's sidebar ID.
+    var id: UUID {
+        switch self {
+        case .channel(let channel): channel.id
+        case .privateMessage(let pm): pm.id
         }
     }
 }

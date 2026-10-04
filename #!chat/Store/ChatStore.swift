@@ -117,40 +117,53 @@ final class ChatStore {
         connectionService.connect(server)
     }
     
+    /// Disconnects at the user's request. The server's channels go too; its private
+    /// conversations stay.
     func disconnect(_ server: IRCServer) {
-        // The service drops the server's channel list wholesale; release the thumbnail
-        // state those logs were holding once the channels are gone.
-        let channels = server.channels
         connectionService.disconnect(server)
-        for channel in channels { discardThumbnails(for: channel.log) }
+        for channel in server.channels { remove(channel, from: server) }
     }
-    
+
     // MARK: - Channels
-    
+
     func joinChannel(_ name: String, key: String? = nil, on server: IRCServer) {
         connectionService.joinChannel(name, key: key, on: server)
     }
-    
+
+    /// Leaves a channel and closes it. One we're no longer in (kicked, or disconnected) just
+    /// closes.
     func partChannel(_ channel: IRCChannel) {
         guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
-        connectionService.partChannel(channel, from: server)
-        // The service removes the channel only when the PART was actually sent (it keeps the
-        // channel when not connected/registered); if it's gone, drop its thumbnail state.
-        if !server.channels.contains(where: { $0.id == channel.id }) {
-            discardThumbnails(for: channel.log)
-        }
+        // "Parted" is logged when the server confirms.
+        if channel.joined { connectionService.partChannel(named: channel.name, on: server) }
+        remove(channel, from: server)
     }
-    
+
     func setTopic(_ topic: String, on channel: IRCChannel) {
         guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
         connectionService.sendTopicChange(topic, for: channel.name, on: server)
     }
 
     func closePrivateMessage(_ pm: IRCPrivateMessage, from server: IRCServer) {
+        connectionService.cancelQueuedLines(to: pm.id)
         discardThumbnails(for: pm.log)
         server.privateMessages.removeAll { $0.id == pm.id }
         server.log.append(ChatMessage(time: Date(), text: "Closed conversation with \(pm.nickname)"))
         noteLogsChanged()
+        selectServerIfSelectionIsGone(server)
+    }
+
+    /// Takes a channel off the sidebar, along with everything kept for it.
+    private func remove(_ channel: IRCChannel, from server: IRCServer) {
+        connectionService.cancelQueuedLines(to: channel.id)
+        discardThumbnails(for: channel.log)
+        server.channels.removeAll { $0.id == channel.id }
+        selectServerIfSelectionIsGone(server)
+    }
+
+    /// After one of `server`'s conversations closes: if it was on screen, show the server.
+    private func selectServerIfSelectionIsGone(_ server: IRCServer) {
+        if selectedItem == nil { selectedNodeID = server.id }
     }
     
     // MARK: - Server CRUD
@@ -185,17 +198,14 @@ final class ChatStore {
     }
 
     func deleteServer(_ server: IRCServer) {
-        let deletingSelected = (selectedNodeID == server.id)
-        let channels = server.channels
-        let pms = server.privateMessages
         connectionService.disconnect(server)
         try! keychain.delete(for: server.id)
         servers.removeAll { $0.id == server.id }
         // Every log this server owned is going away; release their thumbnail state.
         discardThumbnails(for: server.log)
-        for channel in channels { discardThumbnails(for: channel.log) }
-        for pm in pms { discardThumbnails(for: pm.log) }
-        if deletingSelected { selectedNodeID = servers.first?.id }
+        for channel in server.channels { discardThumbnails(for: channel.log) }
+        for pm in server.privateMessages { discardThumbnails(for: pm.log) }
+        if selectedItem == nil { selectedNodeID = servers.first?.id }
     }
     
     func server(withID id: UUID?) -> IRCServer? {
@@ -331,6 +341,7 @@ final class ChatStore {
             return server
         }
         servers = loaded
+        selectedNodeID = servers.first?.id
         // After a migration, make sure the legacy plaintext password is dropped from UserDefaults.
         // Assigning `servers` already triggers didSet -> persistServers() (and encode(to:) omits the
         // password), so this is belt-and-suspenders that also states the migration intent explicitly.
@@ -538,11 +549,8 @@ final class ChatStore {
 
     private func userLeft(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {
         if isSelf {
-            if let channelObj = server.channel(named: channel) {
-                // Channel is removed below; release the thumbnail state its log was holding.
-                discardThumbnails(for: channelObj.log)
-            }
-            server.channels.removeAll { IRCName.equal($0.name, channel) }
+            // Usually closed already, when the part was ours to begin with.
+            if let channelObj = server.channel(named: channel) { remove(channelObj, from: server) }
             server.log.append(ChatMessage(time: Date(), text: "Parted \(channel)"))
             noteLogsChanged()
         } else {

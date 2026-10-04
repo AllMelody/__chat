@@ -17,32 +17,16 @@ struct ContentView: View {
     private let indentWidth: CGFloat = 14
     private var onePixel: CGFloat { 1 / (NSScreen.main?.backingScaleFactor ?? 2) }
 
-    private func validateSelection() {
-        let all = model.sidebarItems
-        let selectionIsValid = model.selectedNodeID.map { id in all.contains { $0.id == id } } ?? false
-        if !selectionIsValid {
-            model.selectedNodeID = model.servers.first?.id ?? all.first?.id
-        }
-    }
-
     private func focusComposer() {
         composerFocusRequest += 1
     }
 
     var body: some View {
         @Bindable var model = model
-        let splitView = AutosavingSplitView(left: { leftPane }, right: { rightPane }, autosaveName: "MainSplitRightWidth")
-
-        let viewWithAppearance = splitView
-            .onAppear { validateSelection(); focusComposer() }
-            .onChange(of: model.servers.map(\.id)) { _, _ in validateSelection() }
-            .onChange(of: model.servers.flatMap { $0.channels.map(\.id) }) { _, _ in validateSelection() }
-        
-        let viewWithStateChanges = viewWithAppearance
+        AutosavingSplitView(left: { leftPane }, right: { rightPane }, autosaveName: "MainSplitRightWidth")
+            .onAppear { focusComposer() }
             .onChange(of: activeState) { _, new in if new == .key { focusComposer() } }
             .onChange(of: model.selectedNodeID) { _, _ in focusComposer() }
-
-        return viewWithStateChanges
             .sheet(isPresented: $model.isPresentingAddServer) { ServerFormView() }
             .sheet(isPresented: $model.isPresentingJoinChannel) { JoinChannelView() }
             .sheet(isPresented: $model.isPresentingEditServer) {
@@ -160,11 +144,7 @@ struct ContentView: View {
                                 activeState: activeState,
                                 menuTitle: "Part Channel",
                                 select: { model.select(node) },
-                                menuAction: {
-                                    let wasSelected = (model.selectedNodeID == ch.id)
-                                    model.partChannel(ch)
-                                    if wasSelected { model.selectedNodeID = server.id }
-                                }
+                                menuAction: { model.partChannel(ch) }
                             )
                             if ch.id != server.channels.last?.id || !server.privateMessages.isEmpty { separator() }
                         }
@@ -180,11 +160,7 @@ struct ContentView: View {
                                 activeState: activeState,
                                 menuTitle: "Close Conversation",
                                 select: { model.select(node) },
-                                menuAction: {
-                                    let wasSelected = (model.selectedNodeID == pm.id)
-                                    model.closePrivateMessage(pm, from: server)
-                                    if wasSelected { model.selectedNodeID = server.id }
-                                }
+                                menuAction: { model.closePrivateMessage(pm, from: server) }
                             )
                             if pm.id != server.privateMessages.last?.id { separator() }
                         }
