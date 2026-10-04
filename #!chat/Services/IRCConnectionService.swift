@@ -127,12 +127,20 @@ final class IRCConnectionService {
     }
 
     private func handleSleep() {
-        // Tear down all connections immediately before the system sleeps.
-        // No waiting for server responses - just close the sockets.
-        for serverID in Array(clients.keys) {
+        // No waiting for server responses before the system sleeps: just close the sockets.
+        suspendConnections(reason: "Going to sleep")
+    }
+
+    /// Drops every connection, and any retry waiting to happen, until the Mac wakes or the
+    /// network returns; `onNetworkAvailable` then brings back the servers that should be
+    /// connected.
+    private func suspendConnections(reason: String) {
+        for serverID in Set(clients.keys).union(reconnectTasks.keys) {
+            if let server = serverLookup?(serverID) {
+                logToServer(reason, on: server)
+            }
             tearDownConnection(for: serverID)
         }
-        // Clear message queue — no point sending after sleep
         clearMessageQueue()
     }
 
@@ -149,7 +157,7 @@ final class IRCConnectionService {
         connectionTimeouts.removeValue(forKey: serverID)?.cancel()
 
         if let server = serverLookup?(serverID) {
-            if server.connectionStatus == .connected || server.connectionStatus == .connecting {
+            if [.connecting, .connected, .reconnecting].contains(server.connectionStatus) {
                 server.connectionStatus = .disconnected
             }
             // Off the server, we're in no channel; rejoining brings fresh member lists.
@@ -177,7 +185,8 @@ final class IRCConnectionService {
 
     // MARK: - Network Monitoring
 
-    private var networkWasUnavailable = false
+    /// Set while the network is down. Nothing retries then; the network's return does.
+    private var isOffline = false
 
     private func setupNetworkMonitoring() {
         // Iterating the monitor starts it; cancelling the task stops it.
@@ -185,14 +194,12 @@ final class IRCConnectionService {
             for await path in NWPathMonitor() {
                 guard let self else { return }
                 if path.status == .satisfied {
-                    // Network is available - reconnect servers if we previously lost network
-                    if self.networkWasUnavailable {
-                        self.networkWasUnavailable = false
+                    if self.isOffline {
+                        self.isOffline = false
                         self.handleNetworkRestored()
                     }
                 } else {
-                    // Network is down - immediately disconnect all servers
-                    self.networkWasUnavailable = true
+                    self.isOffline = true
                     self.handleNetworkLoss()
                 }
             }
@@ -200,14 +207,7 @@ final class IRCConnectionService {
     }
 
     private func handleNetworkLoss() {
-        for serverID in Array(clients.keys) {
-            if let server = serverLookup?(serverID) {
-                logToServer("Network unavailable", on: server)
-            }
-            tearDownConnection(for: serverID)
-        }
-        // Clear message queue — can't send without network
-        clearMessageQueue()
+        suspendConnections(reason: "Network unavailable")
     }
 
     private func handleNetworkRestored() {
@@ -220,7 +220,7 @@ final class IRCConnectionService {
         guard server.connectionStatus != .connecting && server.connectionStatus != .connected else {
             return
         }
-        
+        cancelReconnection(for: server.id)   // this is the attempt a pending retry would have made
         server.connectionStatus = .connecting
         
         let statusText = server.displayAttempt > 0 ?
@@ -283,17 +283,10 @@ final class IRCConnectionService {
     }
     
     private func handleConnectionTimeout(for server: IRCServer) {
-        // Allow timeout handling if we're still trying to connect OR if the connection
-        // attempt just ended. Prevents skipping cleanup when the status turned
-        // .disconnected right before the timeout fired.
-        let validStates: [IRCServer.ConnectionStatus] = [.connecting, .disconnected]
-        guard validStates.contains(server.connectionStatus) else { return }
+        // Everything that ends an attempt cancels its timeout, so this is a stuck attempt.
+        guard server.connectionStatus == .connecting else { return }
 
-        // Only log timeout message if we were still connecting (not already disconnected)
-        if server.connectionStatus == .connecting {
-            logToServer("Connection to \(server.name) timed out", on: server)
-        }
-
+        logToServer("Connection to \(server.name) timed out", on: server)
         server.connectionStatus = .connectionTimeout
         tearDownConnection(for: server.id)
 
@@ -309,6 +302,9 @@ final class IRCConnectionService {
     /// the previous connection.
     func scheduleReconnection(for server: IRCServer) {
         cancelReconnection(for: server.id)
+        // Retrying without a network would only use up attempts. The network's return
+        // reconnects the server instead.
+        guard !isOffline else { return }
 
         switch reconnection.nextAttempt(for: server.id) {
         case .giveUp:
@@ -319,7 +315,10 @@ final class IRCConnectionService {
         case .retry(let attempt, let delay):
             server.connectionStatus = .reconnecting
             server.displayAttempt = attempt
-            logToServer("Reconnecting to \(server.name) in \(delay.components.seconds) seconds... (attempt \(attempt)/\(reconnection.maxAttempts))", on: server)
+            // An immediate retry is announced by connect() alone.
+            if delay > .zero {
+                logToServer("Reconnecting to \(server.name) in \(delay.components.seconds) seconds… (attempt \(attempt)/\(reconnection.maxAttempts))", on: server)
+            }
 
             // Task.sleep only throws on cancellation, which simply ends the task.
             reconnectTasks[server.id] = Task { [weak self] in
@@ -383,7 +382,7 @@ final class IRCConnectionService {
 
         server.connectionStatus = .connectionTimeout
 
-        logToServer("Connection to \(server.name) lost", on: server)
+        logToServer("Connection to \(server.name) lost (ping timeout)", on: server)
         tearDownConnection(for: server.id)
 
         if server.shouldAutoReconnect {

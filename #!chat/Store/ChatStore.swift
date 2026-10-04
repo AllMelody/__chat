@@ -393,16 +393,12 @@ final class ChatStore {
         }
     }
 
+    /// After a wake from sleep or a network outage, reconnects the servers that should be
+    /// connected. (Not .reconnectionFailed: running out of retries clears shouldAutoReconnect.)
     private func reconnectAfterNetworkChange() {
-        // Reconnect the servers that should auto-reconnect and are currently disconnected.
-        // (Not .reconnectionFailed: running out of retries clears shouldAutoReconnect.)
         let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout]
-        for server in servers {
-            if server.shouldAutoReconnect && disconnectedStates.contains(server.connectionStatus) {
-                server.log.append(ChatMessage(time: Date(), text: "Network available, reconnecting..."))
-                noteLogsChanged()
-                connect(server)
-            }
+        for server in servers where server.shouldAutoReconnect && disconnectedStates.contains(server.connectionStatus) {
+            connect(server)
         }
     }
 
