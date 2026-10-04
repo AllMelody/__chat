@@ -40,6 +40,8 @@ final class ChatStore {
     init() {
         setupServices()
         loadServers()
+        // Unit tests run inside the app, which mustn't go connecting to servers meanwhile.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Delay auto-connect to ensure UI is ready
         Task { [weak self] in
             // This task is never cancelled, so the sleep cannot throw.
