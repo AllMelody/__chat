@@ -91,7 +91,7 @@ struct ContentView: View {
 
             Divider()
             ComposerTextField(text: $draft, placeholder: "Type a message…", focusRequest: composerFocusRequest) {
-                if model.canSendToSelection { sendMessage() }
+                if model.handleInputFromComposer(draft) { draft = "" }
             }
             .padding(.leading, 6)
             .padding(.trailing, 4)
@@ -205,10 +205,6 @@ struct ContentView: View {
     }
     private var currentUsers: [String] {
         (model.selectedItem?.channel?.users ?? []).sorted(using: .localizedStandard)
-    }
-    private func sendMessage() {
-        model.handleInputFromComposer(draft)
-        draft = ""
     }
 }
 
@@ -977,10 +973,11 @@ struct SidebarItem: Identifiable {
         case .privateMessage(let pm): pm.log
         }
     }
-    /// Where text typed while the row is selected goes.
-    var messageTarget: MessageTarget {
+    /// Where text typed while the row is selected goes; nil for a server, which only takes
+    /// commands.
+    var messageTarget: MessageTarget? {
         switch kind {
-        case .server: .server
+        case .server: nil
         case .channel(let c): .channel(c)
         case .privateMessage(let pm): .privateMessage(pm)
         }

@@ -464,21 +464,11 @@ final class IRCConnectionService {
     /// Sends `text` to a channel or private conversation, one line at a time through the flood
     /// queue; with `asAction`, each line goes out as a `/me` action.
     func sendMessage(_ text: String, asAction isAction: Bool = false, to target: MessageTarget, from server: IRCServer) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        switch target {
-        case .server:
-            // Server messages are local-only (no IRC send), no splitting needed
-            logToServer(trimmed, on: server)
-
-        case .channel, .privateMessage:
-            // isNewline covers \n, \r and the single-Character \r\n, so no stray \r
-            // ends up inside an outgoing IRC line. Empty lines are omitted.
-            let lines = trimmed.split(whereSeparator: \.isNewline).map(String.init)
-            guard !lines.isEmpty else { return }
-            enqueueLines(lines, isAction: isAction, to: target, from: server)
-        }
+        // isNewline covers \n, \r and the single-Character \r\n, so no stray \r ends up
+        // inside an outgoing IRC line. Empty lines are omitted.
+        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        guard !lines.isEmpty else { return }
+        enqueueLines(lines, isAction: isAction, to: target, from: server)
     }
 
     private func sendSingleLine(_ text: String, isAction: Bool, to target: MessageTarget, from server: IRCServer) {
@@ -495,22 +485,14 @@ final class IRCConnectionService {
         // Show our own line right away: the server never sends it back to us, because we
         // don't request IRCv3 echo-message. (znc.in/self-message is something else: it makes
         // a bouncer relay what we send from our *other* clients, which arrives as isOwn.)
-        let nick = server.currentNick ?? defaultNick
-        let msg = ChatMessage(time: Date(), text: text, senderNick: nick, isPrivmsg: true, isFromMe: true, isAction: isAction)
-        let recipient: String
+        let msg = ChatMessage(time: Date(), text: text, senderNick: client.nickname, isPrivmsg: true, isFromMe: true, isAction: isAction)
         switch target {
-        case .channel(let channel):
-            channel.log.append(msg)
-            recipient = channel.name
-        case .privateMessage(let pm):
-            pm.log.append(msg)
-            recipient = pm.nickname
-        case .server:
-            return
+        case .channel(let channel): channel.log.append(msg)
+        case .privateMessage(let pm): pm.log.append(msg)
         }
         onEvent(.logAppended(msg), server)
         // A failed write ends the connection, which arrives as a .disconnected event.
-        client.send(isAction ? .action(to: recipient, text) : .privateMessage(to: recipient, text))
+        client.send(isAction ? .action(to: target.name, text) : .privateMessage(to: target.name, text))
     }
 
     private func enqueueLines(_ lines: [String], isAction: Bool, to target: MessageTarget, from server: IRCServer) {
@@ -572,7 +554,7 @@ final class IRCConnectionService {
             channel.log.append(msg)
         case .privateMessage(let pm):
             pm.log.append(msg)
-        case .server, .none:
+        case .none:
             server.log.append(msg)
         }
 
@@ -703,10 +685,18 @@ final class IRCConnectionService {
 
 // MARK: - Supporting Types
 
+/// A conversation messages can be sent to.
 enum MessageTarget {
     case channel(IRCChannel)
     case privateMessage(IRCPrivateMessage)
-    case server
+
+    /// The channel or nick the messages are addressed to.
+    var name: String {
+        switch self {
+        case .channel(let channel): channel.name
+        case .privateMessage(let pm): pm.nickname
+        }
+    }
 }
 
 enum MessageTargetType {

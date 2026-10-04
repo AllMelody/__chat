@@ -241,21 +241,6 @@ final class ChatStore {
         select(all[(currentIndex + offset + all.count) % all.count])
     }
 
-    /// Whether the composer can send to the selection right now.
-    /// This checks connection status, client state, and channel join confirmation.
-    var canSendToSelection: Bool {
-        guard let item = selectedItem else { return false }
-
-        // First check the observable status - this is the source of truth for UI state
-        guard item.server.connectionStatus == .connected else { return false }
-
-        // Then verify the server is fully registered.
-        guard connectionService.isRegistered(item.server.id) else { return false }
-
-        // If a channel is selected, only allow sending after the server confirmed our JOIN
-        return item.channel?.joined ?? true
-    }
-
     // MARK: - Log Trimming
 
     /// Pure trim step (static so it can be unit-tested, like `MessageRouter.parse`): once a
@@ -634,88 +619,95 @@ final class ChatStore {
 extension ChatStore {
     /// Carries out a line typed into the composer: text goes to the selected conversation, and
     /// slash commands act on the selected server or channel. Runs through the same operations
-    /// as the menus, so a `/part` or `/quit` tidies up the same way.
-    func handleInputFromComposer(_ text: String) {
-        let selection = selectedItem
-        /// Feedback line in the selected channel, or else in the selected server's log.
-        func log(_ message: String) {
-            guard let selection else { return }
-            let msg = ChatMessage(time: Date(), text: message)
-            if let channel = selection.channel {
-                channel.log.append(msg)
-            } else {
-                selection.server.log.append(msg)
-            }
-            noteLogsChanged()
-            scanMessageForThumbnails(msg)
-        }
+    /// as the menus, so a `/part` or `/quit` tidies up the same way. Feedback shows up in the
+    /// conversation the user is looking at.
+    ///
+    /// Returns false when a message couldn't be sent (when not connected, say), so the
+    /// composer keeps it.
+    func handleInputFromComposer(_ text: String) -> Bool {
+        guard let selection = selectedItem else { return false }
+        let server = selection.server
+        let client = connectionService.isRegistered(server.id) ? connectionService.clients[server.id] : nil
+        func feedback(_ text: String) { log(text, in: selection) }
 
         switch MessageRouter.parse(text) {
         case .text(let body):
-            guard !body.isEmpty, let selection else { return }
-            connectionService.sendMessage(body, to: selection.messageTarget, from: selection.server)
+            guard !body.isEmpty else { return true }
+            return send(body, to: selection)
 
         case .me(let action):
-            guard let selection else { return }
-            if case .server = selection.kind { log("Select a channel or private conversation to use /me."); return }
-            connectionService.sendMessage(action, asAction: true, to: selection.messageTarget, from: selection.server)
+            return send(action, asAction: true, to: selection)
 
         case .join(let name, let key):
-            guard let server = selection?.server else { log("Select a server to join a channel."); return }
+            guard client != nil else { feedback("Not connected."); break }
             joinChannel(name, key: key, on: server)
 
-        case .part(let target):
-            if let target {
-                // Part a specific channel by name
-                guard let server = selection?.server else { log("No active server."); return }
-                if let channel = server.channel(named: target) {
-                    partChannel(channel)
-                } else {
-                    log("Not in channel \(target)")
-                }
-            } else if let channel = selection?.channel {
+        case .part(let name):
+            if let name {
+                guard let channel = server.channel(named: name) else { feedback("Not in \(name)."); break }
                 partChannel(channel)
-            } else { log("Select a channel to part.") }
+            } else if let channel = selection.channel {
+                partChannel(channel)
+            } else {
+                feedback("Select a channel to part.")
+            }
 
-        case .nick(let newNickRaw):
-            guard let server = selection?.server else { log("No active server."); return }
-            guard let client = connectionService.clients[server.id], connectionService.isRegistered(server.id) else { log("Not connected."); return }
-            if IRCName.isValidNickname(newNickRaw) {
-                client.send(.nick(newNickRaw))
-                // Don't update currentNick optimistically - wait for server confirmation
-                log("Attempting to change nick to \(newNickRaw)...")
-            } else { log("Invalid nickname.") }
+        case .nick(let nick):
+            guard let client else { feedback("Not connected."); break }
+            guard IRCName.isValidNickname(nick) else { feedback("Invalid nickname."); break }
+            // The server confirms the change (or refuses it) in a reply.
+            client.send(.nick(nick))
+            feedback("Changing nick to \(nick)…")
 
         case .msg(let target, let message):
-            guard let server = selection?.server else { log("No active server."); return }
-            // Use the proper send flow which handles logging, error handling, and PM conversation creation
+            guard client != nil else { feedback("Not connected."); return false }
             connectionService.sendMessageToTarget(message, targetName: target, from: server)
 
         case .quit:
-            if let server = selection?.server { disconnect(server) } else { log("No active server.") }
+            disconnect(server)
 
         case .names:
-            guard let selection, let channel = selection.channel else { log("Select a channel to list names."); return }
-            guard let client = connectionService.clients[selection.server.id], connectionService.isRegistered(selection.server.id) else { log("Not connected."); return }
+            guard let channel = selection.channel else { feedback("Select a channel to list names."); break }
+            guard let client else { feedback("Not connected."); break }
             client.send(.names(channel.name))
 
         case .topic(let newTopic):
-            guard let selection, let channel = selection.channel else { log("Select a channel to set or view the topic."); return }
-            guard let client = connectionService.clients[selection.server.id], connectionService.isRegistered(selection.server.id) else { log("Not connected."); return }
+            guard let channel = selection.channel else { feedback("Select a channel to set or view the topic."); break }
+            guard let client else { feedback("Not connected."); break }
             // With no new topic, this asks the server for the current one.
             client.send(.topic(channel.name, newTopic))
 
-        case .usage(let cmd):
-            switch cmd {
-            case "join": log("Usage: /join #channel [key]")
-            case "nick": log("Usage: /nick newnickname")
-            case "msg":  log("Usage: /msg <target> <message>")
-            case "me":   log("Usage: /me <action>")
-            default:     log("Usage: /\(cmd)")
+        case .usage(let command):
+            switch command {
+            case "join": feedback("Usage: /join <channel> [key]")
+            case "nick": feedback("Usage: /nick <nickname>")
+            case "msg":  feedback("Usage: /msg <target> <message>")
+            case "me":   feedback("Usage: /me <action>")
+            default:     feedback("Usage: /\(command)")
             }
 
-        case .unknown(let cmd):
-            if !cmd.isEmpty { log("Unknown command: /\(cmd)") }
+        case .unknown(let command):
+            if !command.isEmpty { feedback("Unknown command: /\(command)") }
         }
+        return true
+    }
+
+    /// Sends a message (with `asAction`, a `/me`) to the selected conversation, or says why it
+    /// can't go yet.
+    private func send(_ text: String, asAction: Bool = false, to selection: SidebarItem) -> Bool {
+        guard let target = selection.messageTarget else {
+            log("Select a channel or private conversation first.", in: selection)
+            return false
+        }
+        guard connectionService.isRegistered(selection.server.id) else {
+            log("Not connected.", in: selection)
+            return false
+        }
+        if let channel = selection.channel, !channel.joined {
+            log("Not in \(channel.name).", in: selection)
+            return false
+        }
+        connectionService.sendMessage(text, asAction: asAction, to: target, from: selection.server)
+        return true
     }
 }
