@@ -59,9 +59,20 @@ struct IRCSessionTests {
                 [.privateMessage(peer: "bob", .init(sender: "bob", text: "hi"))])
     }
 
-    @Test func `Nickname in use after registration is not a registration failure`() {
+    @Test func `After registration, a taken nickname is only an error reply`() {
         var session = session()
-        #expect(session.handle(line(":srv 433 alice bob :Nickname is already in use")) == .init())
+        #expect(session.handle(line(":srv 433 alice bob :Nickname is already in use")) ==
+                .init(events: [.errorReply(subject: "bob", text: "Nickname is already in use")]))
+    }
+
+    @Test(arguments: [
+        (":srv 404 alice #swift :Cannot send to channel", IRCEvent.errorReply(subject: "#swift", text: "Cannot send to channel")),
+        (":srv 401 alice bob :No such nick/channel", .errorReply(subject: "bob", text: "No such nick/channel")),
+        (":srv 481 alice :Permission Denied", .errorReply(subject: nil, text: "Permission Denied")),
+    ])
+    func `Error replies say what was refused and why`(reply: String, event: IRCEvent) {
+        var session = session()
+        #expect(session.handle(line(reply)).events == [event])
     }
 
     @Test(arguments: ["421 * CAP :Unknown command", "451 * :You have not registered", "461 CAP :Not enough parameters"])

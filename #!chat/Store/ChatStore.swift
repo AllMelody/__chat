@@ -378,6 +378,8 @@ final class ChatStore {
             serverDidDisconnect(server, reason: reason)
         case .nicknameChanged(let nick):
             serverDidChangeNick(server, to: nick)
+        case .errorReply(let subject, let text):
+            showErrorReply(text, about: subject, on: server)
         case .joined(let channel, let nick, let isSelf):
             userJoined(nick, channel: channel, isSelf: isSelf, on: server)
         case .parted(let channel, let nick, let isSelf):
@@ -452,6 +454,40 @@ final class ChatStore {
         if server.shouldAutoReconnect {
             connectionService.scheduleReconnection(for: server)
         }
+    }
+
+    /// Shows an error reply where the user will see it: in the conversation it's about, or else
+    /// in the one they're looking at on that server, or else in the server log.
+    private func showErrorReply(_ text: String, about subject: String?, on server: IRCServer) {
+        var destination = SidebarItem(server: server, kind: .server)
+        if let subject, let conversation = conversation(named: subject, on: server) {
+            destination = conversation
+        } else if let selected = selectedItem, selected.server.id == server.id {
+            destination = selected
+        }
+        log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: destination)
+    }
+
+    /// The sidebar row of the channel or private conversation called `name` on `server`.
+    private func conversation(named name: String, on server: IRCServer) -> SidebarItem? {
+        if let channel = server.channel(named: name) {
+            return SidebarItem(server: server, kind: .channel(channel))
+        }
+        if let pm = server.privateMessage(with: name) {
+            return SidebarItem(server: server, kind: .privateMessage(pm))
+        }
+        return nil
+    }
+
+    /// Adds a status line to the log a sidebar row shows.
+    private func log(_ text: String, in item: SidebarItem) {
+        let message = ChatMessage(time: Date(), text: text)
+        switch item.kind {
+        case .server: item.server.log.append(message)
+        case .channel(let channel): channel.log.append(message)
+        case .privateMessage(let pm): pm.log.append(message)
+        }
+        noteLogsChanged()
     }
 
     private func serverDidChangeNick(_ server: IRCServer, to nick: String) {

@@ -22,6 +22,9 @@ final class IRCConnectionService {
         case disconnected(reason: String)
         /// Our own nickname changed.
         case nicknameChanged(String)
+        /// The server refused something we sent. `subject` is the channel, nick or command
+        /// it's about, when the reply names one.
+        case errorReply(subject: String?, text: String)
         case joined(channel: String, nick: String, isSelf: Bool)
         case parted(channel: String, nick: String, isSelf: Bool)
         /// `nick` was removed from `channel` by `kicker` (nil when the server did it).
@@ -621,6 +624,9 @@ final class IRCConnectionService {
             if let server = serverLookup?(serverID), server.displayAttempt > 0 {
                 resetReconnectionAttempts(for: server)
             }
+
+        case .errorReply(let subject, let text):
+            report(.errorReply(subject: subject, text: text), for: serverID)
 
         // Server time, when present, dates bouncer backlog to when it was originally sent.
         case .channelMessage(let channel, let message):

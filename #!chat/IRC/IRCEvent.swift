@@ -24,6 +24,9 @@ nonisolated enum IRCEvent: Equatable, Sendable {
     case messageOfTheDay(String)
     /// A reply to a PING, i.e. the server is still there.
     case pong
+    /// The server refused something we sent (an error reply, like "Cannot send to channel").
+    /// `subject` is the channel, nick or command it's about, when the reply names one.
+    case errorReply(subject: String?, text: String)
 
     // MARK: Messages
 

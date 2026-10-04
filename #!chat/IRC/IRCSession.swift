@@ -66,7 +66,7 @@ nonisolated struct IRCSession {
             nickname = parameters.first ?? nickname
             return Output(events: [.registered(nickname: nickname)])
         case "433", "436", "437": // nickname in use, collision, temporarily unavailable
-            guard !isRegistered else { return Output() }
+            guard !isRegistered else { return errorReply(message) }
             // Fall back to nick_, nick__, nick___ before giving up.
             guard nicknameFallbacks < Self.maximumNicknameFallbacks else {
                 return Output(events: [.registrationFailed(reason: parameters.last ?? message.command)])
@@ -76,7 +76,7 @@ nonisolated struct IRCSession {
             return Output(replies: [.nick(nickname)])
         case "432",               // erroneous nickname: no variation of it will do
              "463", "464", "465": // not allowed: host, password, banned
-            guard !isRegistered else { return Output() }
+            guard !isRegistered else { return errorReply(message) }
             return Output(events: [.registrationFailed(reason: parameters.last ?? message.command)])
         case "005": // RPL_ISUPPORT <nick> <token>… :are supported by this server
             for token in parameters.dropFirst().dropLast() {
@@ -91,7 +91,7 @@ nonisolated struct IRCSession {
         case "372": // RPL_MOTD
             messageOfTheDay += (parameters.last ?? "") + "\n"
             return Output()
-        case "376": // RPL_ENDOFMOTD
+        case "376", "422": // RPL_ENDOFMOTD, or ERR_NOMOTD, which is routine rather than an error
             defer { messageOfTheDay = "" }
             return Output(events: messageOfTheDay.isEmpty ? [] : [.messageOfTheDay(messageOfTheDay)])
 
@@ -150,8 +150,19 @@ nonisolated struct IRCSession {
             return Output(events: [.names(channel: channel, nicks: pendingNames.removeValue(forKey: channel) ?? [])])
 
         default:
-            return Output()
+            // Other 4xx and 5xx numerics are error replies too (RFC 2812 §5.2). Before
+            // registration they're only answers to things like CAP on servers without it.
+            guard isRegistered, let code = Int(message.command), (400...599).contains(code) else { return Output() }
+            return errorReply(message)
         }
+    }
+
+    /// The server refused something we sent: `<nick> [<subject>] :<explanation>`.
+    private func errorReply(_ message: IRCMessage) -> Output {
+        let parameters = message.parameters
+        let subject = parameters.count > 2 ? parameters[1] : nil
+        let text = parameters.count > 1 ? parameters[parameters.count - 1] : message.command
+        return Output(events: [.errorReply(subject: subject, text: text)])
     }
 
     // MARK: - Capability negotiation
