@@ -91,6 +91,29 @@ struct IRCMessageTests {
         #expect(IRCMessage(original.wireFormat) == original)
     }
 
+    // MARK: - Long messages
+
+    @Test func `A message of the longest length still fits in the line others receive`() {
+        let source = "alice!" + String(repeating: "u", count: 10) + "@" + String(repeating: "h", count: 63)
+        let text = String(repeating: "x", count: IRCMessage.maximumTextLength(to: "#swift", from: "alice"))
+        #expect(":\(source) PRIVMSG #swift :\(text)\r\n".utf8.count == 512)
+
+        let action = String(repeating: "x", count: IRCMessage.maximumTextLength(to: "#swift", from: "alice", asAction: true))
+        #expect(":\(source) PRIVMSG #swift :\u{1}ACTION \(action)\u{1}\r\n".utf8.count == 512)
+    }
+
+    @Test(arguments: [
+        ("short", 10, ["short"]),
+        ("the quick brown fox", 10, ["the quick", "brown fox"]),   // between words
+        ("aaaa bbbb", 4, ["aaaa", "bbbb"]),                        // at the space just past the limit
+        ("abcdefghij", 4, ["abcd", "efgh", "ij"]),                 // one long word
+        ("ééééé", 5, ["éé", "éé", "é"]),                           // two-byte characters stay whole
+        ("👍🏽👍🏽", 10, ["👍🏽", "👍🏽"]),                                  // and so do emoji
+    ])
+    func `Splits long text`(text: String, maximumLength: Int, pieces: [String]) {
+        #expect(IRCMessage.split(text, maximumLength: maximumLength) == pieces)
+    }
+
     // MARK: - server-time
 
     @Test func `Server time with and without fractional seconds`() throws {

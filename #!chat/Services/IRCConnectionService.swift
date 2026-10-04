@@ -440,13 +440,8 @@ final class IRCConnectionService {
     func sendMessageToTarget(_ text: String, targetName: String, from server: IRCServer) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard clients[server.id] != nil else {
-            handleSendFailure(for: server, reason: "Not connected")
-            return
-        }
-
         guard isRegistered(server.id) else {
-            handleSendFailure(for: server, reason: "Not registered")
+            handleSendFailure(for: server, reason: "Not connected")
             return
         }
 
@@ -462,23 +457,27 @@ final class IRCConnectionService {
     }
 
     /// Sends `text` to a channel or private conversation, one line at a time through the flood
-    /// queue; with `asAction`, each line goes out as a `/me` action.
+    /// queue; with `asAction`, each line goes out as a `/me` action. Lines too long for IRC are
+    /// split, so everyone gets the same lines we show.
     func sendMessage(_ text: String, asAction isAction: Bool = false, to target: MessageTarget, from server: IRCServer) {
+        guard let client = clients[server.id], client.isRegistered else {
+            handleSendFailure(for: server, target: target, reason: "Not connected")
+            return
+        }
+        let maximumLength = IRCMessage.maximumTextLength(to: target.name, from: client.nickname, asAction: isAction)
         // isNewline covers \n, \r and the single-Character \r\n, so no stray \r ends up
-        // inside an outgoing IRC line. Empty lines are omitted.
-        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        // inside an outgoing IRC line. Blank lines are left out.
+        let lines = text.split(whereSeparator: \.isNewline)
+            .filter { !$0.allSatisfy(\.isWhitespace) }
+            .flatMap { IRCMessage.split(String($0), maximumLength: maximumLength) }
         guard !lines.isEmpty else { return }
         enqueueLines(lines, isAction: isAction, to: target, from: server)
     }
 
     private func sendSingleLine(_ text: String, isAction: Bool, to target: MessageTarget, from server: IRCServer) {
-        guard let client = clients[server.id] else {
+        // The connection can drop while lines wait in the queue.
+        guard let client = clients[server.id], client.isRegistered else {
             handleSendFailure(for: server, target: target, reason: "Not connected")
-            return
-        }
-
-        guard isRegistered(server.id) else {
-            handleSendFailure(for: server, target: target, reason: "Not registered")
             return
         }
 

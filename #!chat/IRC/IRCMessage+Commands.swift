@@ -39,3 +39,50 @@ nonisolated extension IRCMessage {
     static func names(_ channel: String) -> IRCMessage { IRCMessage("NAMES", [channel]) }
     static func quit(_ reason: String? = nil) -> IRCMessage { IRCMessage("QUIT", reason.map { [$0] } ?? []) }
 }
+
+// MARK: - Long messages
+
+nonisolated extension IRCMessage {
+    /// The most bytes of text a PRIVMSG (or with `asAction`, a `/me`) to `target` can carry and
+    /// still reach everyone whole. A line is at most 512 bytes (RFC 2812 §2.3), and the copy the
+    /// server relays carries our `nick!user@host` in front. The user and host aren't known here,
+    /// so this leaves room for the longest usual ones.
+    static func maximumTextLength(to target: String, from nickname: String, asAction: Bool = false) -> Int {
+        let empty = asAction ? action(to: target, "") : privateMessage(to: target, "")
+        // ":nick!user@host PRIVMSG <target> :<text>\r\n"
+        let overhead = 1 + nickname.utf8.count + longestUserAndHost + 1 + empty.wireFormat.utf8.count + 2
+        return maximumLineLength - overhead
+    }
+
+    /// Splits `text` into pieces of at most `maximumLength` UTF-8 bytes, breaking between words
+    /// where it can and never inside a character.
+    static func split(_ text: String, maximumLength: Int) -> [String] {
+        var pieces: [String] = []
+        var rest = text[...]
+        while rest.utf8.count > maximumLength {
+            // The longest run of whole characters that fits. It ends before `rest` does.
+            var end = rest.startIndex
+            var length = 0
+            while length + rest[end].utf8.count <= maximumLength {
+                length += rest[end].utf8.count
+                end = rest.index(after: end)
+            }
+            // Break at the run's last space, or the one just after it, dropping the space.
+            if let space = rest[...end].lastIndex(of: " "), space > rest.startIndex {
+                pieces.append(String(rest[..<space]))
+                rest = rest[rest.index(after: space)...]
+            } else {
+                // No space to break at: cut the word. A character too long to fit goes alone.
+                if end == rest.startIndex { end = rest.index(after: end) }
+                pieces.append(String(rest[..<end]))
+                rest = rest[end...]
+            }
+        }
+        pieces.append(String(rest))
+        return pieces
+    }
+
+    private static let maximumLineLength = 512
+    /// `!user@host` at the usual limits of 10 characters for the user and 63 for the host.
+    private static let longestUserAndHost = 1 + 10 + 1 + 63
+}
