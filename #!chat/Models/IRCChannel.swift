@@ -10,6 +10,9 @@ final class IRCChannel: Identifiable {
     var log: [ChatMessage] = []
     var unreadCount: Int = 0
     var joined: Bool = false
+    /// We were kicked out and haven't rejoined since. Reconnecting doesn't rejoin it either:
+    /// going back is the user's call.
+    var wasKicked: Bool = false
     /// The key (channel password) we joined with, to rejoin with after a reconnect.
     var key: String?
 

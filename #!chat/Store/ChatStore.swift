@@ -455,7 +455,7 @@ final class ChatStore {
         // keep us redialing forever.
         server.shouldAutoReconnect = true
 
-        for channel in server.channels {
+        for channel in server.channels where !channel.wasKicked {
             connectionService.joinChannel(channel.name, key: channel.key, on: server)
         }
 
@@ -542,6 +542,7 @@ final class ChatStore {
         // The member list follows in the NAMES reply the server sends with every join.
         let channelObj = server.getOrCreateChannel(named: channel)
         channelObj.joined = true
+        channelObj.wasKicked = false
         let message = ChatMessage(time: Date(), text: "Joined \(channel)")
         channelObj.log.append(message)
         server.log.append(message)
@@ -566,6 +567,7 @@ final class ChatStore {
         if isSelf {
             // Keep the channel and its log so the user can read back and /join again.
             channelObj.joined = false
+            channelObj.wasKicked = true
             channelObj.users.removeAll()
             let message = ChatMessage(time: Date(), text: "You were kicked from \(channel)\(details)")
             channelObj.log.append(message)
