@@ -67,21 +67,20 @@ final class ChatStore {
         }
     }
 
-    // MARK: - Highlight Notifications
+    // MARK: - Notifications
 
-    /// Posts a macOS notification for a nick mention, unless the user is plainly already
+    /// Posts a macOS notification about a message, unless the user is plainly already
     /// looking at the conversation (app active + conversation selected) or the message is
     /// old backlog replayed on reconnect (ZNC playback carries server-time) rather than
     /// live traffic.
-    private func notifyHighlight(for message: ChatMessage, conversation: String, serverName: String, nodeID: UUID) {
+    private func notify(_ title: String, about message: ChatMessage, on server: IRCServer, nodeID: UUID) {
         guard Date().timeIntervalSince(message.time) < 60 else { return }
         if NSApp.isActive && selectedNodeID == nodeID { return }
         let sender = message.senderNick ?? "Someone"
-        notificationService.postHighlight(
-            sender: sender,
-            text: message.isAction ? "* \(sender) \(message.text)" : message.text,
-            conversation: conversation,
-            serverName: serverName,
+        notificationService.post(
+            title: title,
+            subtitle: server.name,
+            body: message.isAction ? "* \(sender) \(message.text)" : message.text,
             nodeID: nodeID
         )
     }
@@ -511,19 +510,20 @@ final class ChatStore {
             channel.log.append(message)
             scanMessageForThumbnails(message)
             if message.isHighlight {
-                notifyHighlight(for: message, conversation: channel.name, serverName: server.name, nodeID: channel.id)
+                notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message, on: server, nodeID: channel.id)
             }
 
             if !message.isFromMe, selectedNodeID != channel.id {
                 channel.unreadCount += 1
             }
 
-        case .privateMessage(let senderNick):
-            let pm = server.getOrCreatePrivateMessage(with: senderNick)
+        case .privateMessage(let peer):
+            let pm = server.getOrCreatePrivateMessage(with: peer)
             pm.log.append(message)
             scanMessageForThumbnails(message)
-            if message.isHighlight {
-                notifyHighlight(for: message, conversation: "a private message", serverName: server.name, nodeID: pm.id)
+            // A private message is meant for us, so every one is worth a notification.
+            if !message.isFromMe {
+                notify("Message from \(peer)", about: message, on: server, nodeID: pm.id)
             }
 
             if !message.isFromMe, selectedNodeID != pm.id {

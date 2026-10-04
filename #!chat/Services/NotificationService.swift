@@ -2,8 +2,8 @@ import AppKit
 import os
 import UserNotifications
 
-/// Posts macOS user notifications for nick highlights and routes notification clicks
-/// back to the conversation that triggered them.
+/// Posts macOS user notifications for mentions and private messages, and routes notification
+/// clicks back to the conversation that triggered them.
 ///
 /// Threading: create and use on the main thread (owned by ChatStore). Delegate callbacks
 /// from UNUserNotificationCenter are `nonisolated` and hop to the main actor before
@@ -24,22 +24,22 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func postHighlight(sender: String, text: String, conversation: String, serverName: String, nodeID: UUID) {
+    func post(title: String, subtitle: String, body: String, nodeID: UUID) {
         let content = UNMutableNotificationContent()
-        content.title = "\(sender) mentioned you in \(conversation)"
-        content.subtitle = serverName
-        content.body = text
+        content.title = title
+        content.subtitle = subtitle
+        content.body = body
         content.sound = .default
         content.userInfo = ["nodeID": nodeID.uuidString]
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         center.add(request) { error in
-            if let error { Self.logger.error("Failed to post highlight notification: \(String(describing: error))") }
+            if let error { Self.logger.error("Failed to post notification: \(String(describing: error))") }
         }
     }
 
     /// Show banners even while the app is frontmost — ChatStore already skips posting when
-    /// the mentioning conversation is the one on screen, so anything that reaches here is
-    /// for a conversation the user is not looking at.
+    /// the conversation is the one on screen, so anything that reaches here is for a
+    /// conversation the user is not looking at.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .sound]
