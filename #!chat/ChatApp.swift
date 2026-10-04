@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -22,6 +23,8 @@ struct ChatApp: App {
             .environment(model)
             .environment(preferences)
             .commands {
+                CloseCommands()
+
                 CommandMenu("Server") {
                     Button("Add Server…") { model.isPresentingAddServer = true }
                         .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -60,3 +63,26 @@ struct ChatApp: App {
     }
 }
 
+/// ⌘W, File ▸ Close, closes the channel or private conversation on screen once the user
+/// confirms, not the main window: that would quit the app and drop every connection. Other
+/// windows, like Settings, still close with it.
+struct CloseCommands: Commands {
+    /// Set only while the main window is key.
+    @FocusedValue(ChatStore.self) private var model
+
+    var body: some Commands {
+        CommandGroup(replacing: .saveItem) {
+            if let model {
+                let selection = model.selectedItem
+                Button(selection?.channel != nil ? "Part Channel…" : "Close Conversation…") {
+                    if let selection { model.requestClosing(selection) }
+                }
+                .keyboardShortcut("w")
+                .disabled(selection?.isConversation != true)
+            } else {
+                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+                    .keyboardShortcut("w")
+            }
+        }
+    }
+}

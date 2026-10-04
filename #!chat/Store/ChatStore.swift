@@ -31,6 +31,8 @@ final class ChatStore {
     var pendingEditServerID: UUID?
     var isPresentingDeleteServer: Bool = false
     var pendingDeleteServerID: UUID?
+    var isPresentingCloseConversation: Bool = false
+    var pendingCloseConversationID: UUID?
     var isPresentingTopicEditor: Bool = false
     
     // Preferences
@@ -158,6 +160,22 @@ final class ChatStore {
         selectServerIfSelectionIsGone(server)
     }
 
+    /// Asks the user to confirm before `closeConversation` runs: its shortcut, ⌘W, is easy to
+    /// hit by mistake, and the conversation's log goes with it.
+    func requestClosing(_ conversation: SidebarItem) {
+        pendingCloseConversationID = conversation.id
+        isPresentingCloseConversation = true
+    }
+
+    /// Parts a channel or closes a private conversation.
+    func closeConversation(_ conversation: SidebarItem) {
+        switch conversation.kind {
+        case .server: preconditionFailure("A server isn't a conversation")
+        case .channel(let channel): partChannel(channel)
+        case .privateMessage(let pm): closePrivateMessage(pm, from: conversation.server)
+        }
+    }
+
     /// Takes a channel off the sidebar, along with everything kept for it.
     private func remove(_ channel: IRCChannel, from server: IRCServer) {
         connectionService.cancelQueuedLines(to: channel.id)
@@ -227,11 +245,14 @@ final class ChatStore {
         }
     }
 
-    /// The selected sidebar row, unless what it showed has gone away.
-    var selectedItem: SidebarItem? {
-        guard let id = selectedNodeID else { return nil }
+    /// The sidebar row with this id, unless what it showed has gone away.
+    func sidebarItem(withID id: UUID?) -> SidebarItem? {
+        guard let id else { return nil }
         return sidebarItems.first { $0.id == id }
     }
+
+    /// The selected sidebar row, unless what it showed has gone away.
+    var selectedItem: SidebarItem? { sidebarItem(withID: selectedNodeID) }
 
     /// The sidebar row of the channel or private conversation called `name` on `server`.
     private func conversation(named name: String, on server: IRCServer) -> SidebarItem? {

@@ -23,6 +23,7 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var model = model
+        let closing = model.sidebarItem(withID: model.pendingCloseConversationID)
         AutosavingSplitView(left: { leftPane }, right: { rightPane }, autosaveName: "MainSplitRightWidth")
             .onAppear { focusComposer() }
             .onChange(of: activeState) { _, new in if new == .key { focusComposer() } }
@@ -50,6 +51,18 @@ struct ContentView: View {
             } message: { server in
                 Text("“\(server.name)” and its saved password will be removed. This can’t be undone.")
             }
+            .confirmationDialog(closing?.channel != nil ? "Part Channel?" : "Close Conversation?",
+                                isPresented: $model.isPresentingCloseConversation, presenting: closing) { conversation in
+                Button(conversation.channel != nil ? "Part" : "Close") { model.closeConversation(conversation) }
+            } message: { conversation in
+                if let channel = conversation.channel {
+                    Text("You’ll leave \(channel.name), and its messages will be cleared.")
+                } else {
+                    Text("Your messages with \(conversation.name) will be cleared.")
+                }
+            }
+            // Lets the menu commands tell when this window is key, rather than Settings, say.
+            .focusedSceneValue(model)
     }
 
     // MARK: - Left Pane
@@ -943,6 +956,10 @@ struct SidebarItem: Identifiable {
             case .connectionTimeout, .reconnectionFailed, .disconnected: "network.slash"
             }
         }
+    }
+    /// Whether the row is a channel or private conversation, rather than a server.
+    var isConversation: Bool {
+        if case .server = kind { false } else { true }
     }
     /// The row's channel, when it is one.
     var channel: IRCChannel? {
