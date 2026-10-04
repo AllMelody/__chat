@@ -37,7 +37,9 @@ nonisolated enum IRCEvent: Equatable, Sendable {
     /// recipient of one we sent from another client (`isOwn`, relayed by a bouncer thanks to
     /// znc.in/self-message).
     case privateMessage(peer: String, Message)
-    case notice(text: String, time: Date?)
+    /// A NOTICE from `sender` (nil when the server sent it without a source), sent to us or,
+    /// with `channel`, to a channel.
+    case notice(sender: String?, channel: String?, text: String, time: Date?)
 
     /// What a PRIVMSG says, wherever it was sent.
     struct Message: Equatable, Sendable {

@@ -281,9 +281,15 @@ struct IRCSessionTests {
     @Test func `Notices from servers and users`() {
         var session = session(registered: false)
         #expect(session.handle(line(":srv NOTICE * :*** Looking up your hostname...")).events ==
-                [.notice(text: "*** Looking up your hostname...", time: nil)])
+                [.notice(sender: "srv", channel: nil, text: "*** Looking up your hostname...", time: nil)])
         #expect(session.handle(line("NOTICE AUTH :*** Processing connection")).events ==
-                [.notice(text: "*** Processing connection", time: nil)])
+                [.notice(sender: nil, channel: nil, text: "*** Processing connection", time: nil)])
+
+        _ = session.handle(line(":srv 001 alice :Welcome"))
+        #expect(session.handle(line(":NickServ!s@services NOTICE alice :This nickname is registered")).events ==
+                [.notice(sender: "NickServ", channel: nil, text: "This nickname is registered", time: nil)])
+        #expect(session.handle(line(":bot!b@h NOTICE #swift :Meeting in five")).events ==
+                [.notice(sender: "bot", channel: "#swift", text: "Meeting in five", time: nil)])
     }
 
     // MARK: - CTCP

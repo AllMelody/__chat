@@ -637,8 +637,10 @@ final class IRCConnectionService {
         case .privateMessage(let peer, let message):
             report(.messageReceived(chatMessage(message, nickname: client.nickname), .privateMessage(peer)), for: serverID)
 
-        case .notice(let text, let time):
-            logServerEvent("NOTICE: \(text)", time: time, for: serverID)
+        case .notice(let sender, let channel, let text, let time):
+            // "NOTICE from NickServ: …", "NOTICE from bot to #chan: …", or just "NOTICE: …"
+            let origin = (sender.map { " from \($0)" } ?? "") + (channel.map { " to \($0)" } ?? "")
+            logServerEvent("NOTICE\(origin): \(text)", time: time, for: serverID)
 
         case .joined(let channel, let nick, let isSelf):
             report(.joined(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
