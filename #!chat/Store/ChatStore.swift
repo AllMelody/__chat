@@ -443,7 +443,7 @@ final class ChatStore {
     private func serverFailedToRegister(_ server: IRCServer, reason: String) {
         connectionService.cancelConnectionTimeout(for: server)
 
-        server.log.append(ChatMessage(time: Date(), text: "Failed to register with server (\(reason))"))
+        server.log.append(ChatMessage(time: Date(), text: "Failed to connect to \(server.name) (\(reason))"))
         noteLogsChanged()
 
         if server.shouldAutoReconnect {
@@ -486,14 +486,15 @@ final class ChatStore {
     }
 
     private func serverDidChangeNick(_ server: IRCServer, to nick: String) {
-        // Our own entry in the member lists follows the rename too.
-        if let oldNick = server.currentNick {
-            for channel in server.channels {
-                channel.updateUserNick(from: oldNick, to: nick)
-            }
+        let message = ChatMessage(time: Date(), text: "You are now known as \(nick)")
+        // Like anyone's rename, ours shows in the channels we're in, and our entry in their
+        // member lists follows it.
+        for channel in server.channels where channel.joined {
+            if let oldNick = server.currentNick { channel.updateUserNick(from: oldNick, to: nick) }
+            channel.log.append(message)
         }
         server.currentNick = nick
-        server.log.append(ChatMessage(time: Date(), text: "You are now known as \(nick)"))
+        server.log.append(message)
         noteLogsChanged()
     }
 

@@ -16,7 +16,9 @@ struct ChatApp: App {
     }
 
     var body: some Scene {
-        WindowGroup { ContentView() }
+        // One window: the selection and sheets live in the shared ChatStore, so a second window
+        // would only mirror the first.
+        Window("#!chat", id: "main") { ContentView() }
             .environment(model)
             .environment(preferences)
             .commands {
