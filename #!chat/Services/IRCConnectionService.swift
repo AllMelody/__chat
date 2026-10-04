@@ -404,7 +404,8 @@ final class IRCConnectionService {
         }
 
         client.send(.join(name, key: key))
-        _ = server.getOrCreateChannel(named: name)
+        let channel = server.getOrCreateChannel(named: name)
+        if let key { channel.key = key }
     }
 
     /// Takes us out of a channel. The server confirms with a PART of our own.

@@ -10,6 +10,8 @@ final class IRCChannel: Identifiable {
     var log: [ChatMessage] = []
     var unreadCount: Int = 0
     var joined: Bool = false
+    /// The key (channel password) we joined with, to rejoin with after a reconnect.
+    var key: String?
 
     init(name: String) { self.name = name }
 

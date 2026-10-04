@@ -434,7 +434,7 @@ final class ChatStore {
         server.shouldAutoReconnect = true
 
         for channel in server.channels {
-            connectionService.joinChannel(channel.name, on: server)
+            connectionService.joinChannel(channel.name, key: channel.key, on: server)
         }
 
         connectionService.startPingMonitoring(for: server)
