@@ -1014,18 +1014,32 @@ struct ServerFormView: View {
     @Environment(ChatStore.self) private var model
     @Environment(\.dismiss) private var dismiss
     let server: IRCServer?
-    init(server: IRCServer? = nil) { self.server = server }
-    @State private var name: String = ""
-    @State private var host: String = ""
-    @State private var port: String = "6667"
-    @State private var password: String = ""
-    @State private var useTLS: Bool = false
-    @State private var autoConnectOnLaunch: Bool = false
-    @State private var nickname: String = ""
+    @State private var name: String
+    @State private var host: String
+    @State private var port: String
+    @State private var password: String
+    @State private var useTLS: Bool
+    @State private var autoConnectOnLaunch: Bool
+    @State private var nickname: String
+
+    // Filled in here rather than in onAppear, where setting useTLS would trigger its port swap.
+    init(server: IRCServer? = nil) {
+        self.server = server
+        _name = State(initialValue: server?.name ?? "")
+        _host = State(initialValue: server?.host ?? "")
+        _port = State(initialValue: String(server?.port ?? 6667))
+        _password = State(initialValue: server?.password ?? "")
+        _useTLS = State(initialValue: server?.useTLS ?? false)
+        _autoConnectOnLaunch = State(initialValue: server?.autoConnectOnLaunch ?? false)
+        _nickname = State(initialValue: server?.nickname ?? "")
+    }
+
     private var validPort: Int? { Int(port).flatMap { (1...65535).contains($0) ? $0 : nil } }
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+    private var trimmedHost: String { host.trimmingCharacters(in: .whitespaces) }
     private var trimmedNick: String { nickname.trimmingCharacters(in: .whitespaces) }
     private var nickIsValid: Bool { trimmedNick.isEmpty || IRCName.isValidNickname(trimmedNick) }
-    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !host.trimmingCharacters(in: .whitespaces).isEmpty && validPort != nil && nickIsValid }
+    private var canSave: Bool { !trimmedName.isEmpty && !trimmedHost.isEmpty && validPort != nil && nickIsValid }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(server == nil ? "Add Server" : "Edit Server").font(.headline)
@@ -1059,25 +1073,15 @@ struct ServerFormView: View {
                     let pwd: String? = password.isEmpty ? nil : password
                     let nick: String? = trimmedNick.isEmpty ? nil : trimmedNick
                     if let server {
-                        model.updateServer(id: server.id, name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                        model.updateServer(id: server.id, name: trimmedName, host: trimmedHost, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
                     } else {
-                        model.addServer(name: name, host: host, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                        model.addServer(name: trimmedName, host: trimmedHost, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
                     }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canSave)
             }
-        }
-        .onAppear {
-            guard let server else { return }
-            name = server.name
-            host = server.host
-            port = String(server.port)
-            password = server.password ?? ""
-            useTLS = server.useTLS
-            autoConnectOnLaunch = server.autoConnectOnLaunch
-            nickname = server.nickname ?? ""
         }
         .padding(16)
         .frame(width: 420)
@@ -1131,7 +1135,9 @@ struct TopicEditorView: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Set Topic") {
-                    model.setTopic(topicDraft, on: channel)
+                    let topic = topicDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Setting the same topic again would announce a change to the whole channel.
+                    if topic != (channel.topic ?? "") { model.setTopic(topic, on: channel) }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

@@ -141,6 +141,10 @@ final class ChatStore {
 
     func setTopic(_ topic: String, on channel: IRCChannel) {
         guard let server = servers.first(where: { $0.channels.contains(where: { $0.id == channel.id }) }) else { return }
+        guard connectionService.isRegistered(server.id) else {
+            log("Not connected.", in: SidebarItem(server: server, kind: .channel(channel)))
+            return
+        }
         connectionService.sendTopicChange(topic, for: channel.name, on: server)
     }
 
