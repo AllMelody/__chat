@@ -391,12 +391,7 @@ final class ChatStore {
         case .topic(let channel, let topic, let setBy):
             topicChanged(to: topic, in: channel, by: setBy, on: server)
         case .names(let channelName, let nicks):
-            guard let channel = server.channel(named: channelName) else { return }
-            for nick in nicks where !nick.isEmpty {
-                channel.addUserIfNotPresent(nick)
-            }
-        case .whoReply(let channelName, let nick):
-            server.channel(named: channelName)?.addUserIfNotPresent(nick)
+            server.channel(named: channelName)?.users = nicks
         }
     }
 
@@ -507,16 +502,17 @@ final class ChatStore {
     }
 
     private func userJoined(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {
-        let channelObj = server.getOrCreateChannel(named: channel)
-        channelObj.addUserIfNotPresent(nick)
-
-        if isSelf {
-            channelObj.joined = true
-            let message = ChatMessage(time: Date(), text: "Joined \(channel)")
-            channelObj.log.append(message)
-            server.log.append(message)
-            noteLogsChanged()
+        guard isSelf else {
+            server.channel(named: channel)?.addUserIfNotPresent(nick)
+            return
         }
+        // The member list follows in the NAMES reply the server sends with every join.
+        let channelObj = server.getOrCreateChannel(named: channel)
+        channelObj.joined = true
+        let message = ChatMessage(time: Date(), text: "Joined \(channel)")
+        channelObj.log.append(message)
+        server.log.append(message)
+        noteLogsChanged()
     }
 
     private func userLeft(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {

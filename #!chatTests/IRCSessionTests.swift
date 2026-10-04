@@ -201,18 +201,22 @@ struct IRCSessionTests {
                 [.topic(channel: "#swift", topic: "", setBy: "bob")])
     }
 
-    @Test func `Names lose their status prefixes`() {
+    @Test func `Names arrive as one list, without status prefixes`() {
         var session = session()
-        #expect(session.handle(line(":srv 353 alice = #swift :@op +voice ~@owner plain")).events ==
+        #expect(session.handle(line(":srv 353 alice = #swift :@op +voice")) == .init())
+        #expect(session.handle(line(":srv 353 alice = #swift :~@owner plain")) == .init())
+        #expect(session.handle(line(":srv 366 alice #swift :End of /NAMES list.")).events ==
                 [.names(channel: "#swift", nicks: ["op", "voice", "owner", "plain"])])
-        #expect(session.handle(line(":srv 353 alice &local :@op")).events ==   // RFC 1459 form, no symbol
+
+        _ = session.handle(line(":srv 353 alice &local :@op"))   // RFC 1459 form, no symbol
+        #expect(session.handle(line(":srv 366 alice &local :End of /NAMES list.")).events ==
                 [.names(channel: "&local", nicks: ["op"])])
     }
 
-    @Test func `WHO replies, including an IPv6 host`() {
+    @Test func `A channel with no visible members has an empty list`() {
         var session = session()
-        #expect(session.handle(line(":srv 352 alice #swift ~u 2001:db8::1 srv bob H :0 Bob")).events ==
-                [.whoReply(channel: "#swift", nick: "bob")])
+        #expect(session.handle(line(":srv 366 alice #secret :End of /NAMES list.")).events ==
+                [.names(channel: "#secret", nicks: [])])
     }
 
     // MARK: - Messages

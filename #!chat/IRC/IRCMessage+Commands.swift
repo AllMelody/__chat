@@ -37,6 +37,5 @@ nonisolated extension IRCMessage {
         IRCMessage("TOPIC", [channel] + (topic.map { [$0] } ?? []))
     }
     static func names(_ channel: String) -> IRCMessage { IRCMessage("NAMES", [channel]) }
-    static func who(_ mask: String) -> IRCMessage { IRCMessage("WHO", [mask]) }
     static func quit(_ reason: String? = nil) -> IRCMessage { IRCMessage("QUIT", reason.map { [$0] } ?? []) }
 }

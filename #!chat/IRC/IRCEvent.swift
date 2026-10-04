@@ -63,8 +63,7 @@ nonisolated enum IRCEvent: Equatable, Sendable {
     case nickChanged(from: String, to: String)
     /// The channel topic: the current one when joining (`setBy` nil), or a change.
     case topic(channel: String, topic: String, setBy: String?)
-    /// A batch of channel members (RPL_NAMREPLY), with status prefixes like `@` removed.
+    /// Everyone in a channel, from a complete NAMES reply (sent when we join, or for /names),
+    /// with status prefixes like `@` removed.
     case names(channel: String, nicks: [String])
-    /// One channel member from a WHO reply.
-    case whoReply(channel: String, nick: String)
 }

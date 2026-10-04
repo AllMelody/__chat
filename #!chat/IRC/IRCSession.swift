@@ -26,6 +26,8 @@ nonisolated struct IRCSession {
     /// (ISUPPORT STATUSMSG). None until the server advertises some.
     private var statusMessagePrefixes: Set<Character> = []
     private var messageOfTheDay = ""
+    /// Members collected so far for channels whose NAMES reply is still arriving.
+    private var pendingNames: [String: [String]] = [:]
 
     init(nickname: String, password: String?) {
         self.nickname = nickname
@@ -137,13 +139,15 @@ nonisolated struct IRCSession {
             return Output(events: [.topic(channel: parameters[0], topic: parameters[1], setBy: sender)])
         case "353": // RPL_NAMREPLY <nick> [<symbol>] <channel> :<prefixed nicks>
             guard parameters.count >= 3 else { return Output() }
-            let nicks = parameters[parameters.count - 1].split(separator: " ").map {
-                String($0.drop { Self.memberStatusPrefixes.contains($0) })
-            }
-            return Output(events: [.names(channel: parameters[parameters.count - 2], nicks: nicks)])
-        case "352": // RPL_WHOREPLY <nick> <channel> <user> <host> <server> <member nick> <flags> :<hops> <real name>
-            guard parameters.count >= 6 else { return Output() }
-            return Output(events: [.whoReply(channel: parameters[1], nick: parameters[5])])
+            let nicks = parameters[parameters.count - 1].split(separator: " ")
+                .map { String($0.drop { Self.memberStatusPrefixes.contains($0) }) }
+                .filter { !$0.isEmpty }
+            pendingNames[parameters[parameters.count - 2], default: []] += nicks
+            return Output()
+        case "366": // RPL_ENDOFNAMES <nick> <channel> :End of /NAMES list
+            guard parameters.count >= 2 else { return Output() }
+            let channel = parameters[1]
+            return Output(events: [.names(channel: channel, nicks: pendingNames.removeValue(forKey: channel) ?? [])])
 
         default:
             return Output()

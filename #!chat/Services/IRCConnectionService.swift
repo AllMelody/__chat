@@ -31,10 +31,8 @@ final class IRCConnectionService {
         case quit(nick: String, reason: String?)
         /// The channel topic: the current one when joining (`setBy` nil), or a change.
         case topic(channel: String, topic: String, setBy: String?)
-        /// A batch of channel members, without their status prefixes.
+        /// Everyone in a channel, without their status prefixes.
         case names(channel: String, nicks: [String])
-        /// One channel member from a WHO reply.
-        case whoReply(channel: String, nick: String)
     }
 
     /// Receives every event, in order, with the server it concerns.
@@ -151,8 +149,10 @@ final class IRCConnectionService {
             if server.connectionStatus == .connected || server.connectionStatus == .connecting {
                 server.connectionStatus = .disconnected
             }
+            // Off the server, we're in no channel; rejoining brings fresh member lists.
             for channel in server.channels {
                 channel.joined = false
+                channel.users.removeAll()
             }
         }
 
@@ -636,10 +636,6 @@ final class IRCConnectionService {
 
         case .joined(let channel, let nick, let isSelf):
             report(.joined(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
-            if isSelf {
-                client.send(.names(channel))
-                client.send(.who(channel))
-            }
 
         case .parted(let channel, let nick, let isSelf):
             report(.parted(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
@@ -658,9 +654,6 @@ final class IRCConnectionService {
 
         case .names(let channel, let nicks):
             report(.names(channel: channel, nicks: nicks), for: serverID)
-
-        case .whoReply(let channel, let nick):
-            report(.whoReply(channel: channel, nick: nick), for: serverID)
         }
     }
 
