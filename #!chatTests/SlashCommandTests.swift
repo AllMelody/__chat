@@ -14,6 +14,7 @@ struct SlashCommandTests {
         ("/msg alice", .usage("msg")),                                              // message required
         ("/part", .part(target: nil)),                                              // target optional
         ("/part #foo", .part(target: "#foo")),
+        ("/part foo", .part(target: "#foo")),                                       // adds '#', like /join
         ("/topic", .topic(nil)),                                                    // requests current
         ("/topic new topic here", .topic("new topic here")),                        // joins remainder
         ("/QUIT", .quit),                                                           // case-insensitive

@@ -31,11 +31,10 @@ enum MessageRouter {
 
         switch cmd {
         case "join":
-            guard let rawCh = parts.first else { return .usage("join") }
-            let name = IRCName.isChannel(rawCh) ? rawCh : "#" + rawCh
-            return .join(channel: name, key: parts.count >= 2 ? parts[1] : nil)
+            guard let name = parts.first else { return .usage("join") }
+            return .join(channel: channelName(name), key: parts.count >= 2 ? parts[1] : nil)
         case "part":
-            return .part(target: parts.first)
+            return .part(target: parts.first.map(channelName))
         case "nick":
             guard let n = parts.first else { return .usage("nick") }
             return .nick(n)
@@ -54,5 +53,10 @@ enum MessageRouter {
         default:
             return .unknown(cmd)
         }
+    }
+
+    /// A channel name as typed: one without a channel prefix gets the usual `#`.
+    private static func channelName(_ name: String) -> String {
+        IRCName.isChannel(name) ? name : "#" + name
     }
 }

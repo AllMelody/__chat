@@ -60,7 +60,8 @@ nonisolated extension IRCMessage {
         var pieces: [String] = []
         var rest = text[...]
         while rest.utf8.count > maximumLength {
-            // The longest run of whole characters that fits. It ends before `rest` does.
+            // The longest run of whole characters that fits, which ends short of the end of
+            // `rest`, since all of `rest` doesn't fit.
             var end = rest.startIndex
             var length = 0
             while length + rest[end].utf8.count <= maximumLength {

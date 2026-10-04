@@ -175,9 +175,10 @@ final class ImageCacheService {
     func scanMessageForThumbnails(_ message: ChatMessage, showImageThumbnails: Bool) {
         guard showImageThumbnails else { return }
         let text = message.text
+        let range = NSRange(location: 0, length: (text as NSString).length)
         var links: [URL] = []
         var seen = Set<String>()
-        linkDetector.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: (text as NSString).length)) { result, _, _ in
+        linkDetector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
             guard let url = result?.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                   seen.insert(url.absoluteString).inserted else { return }
             links.append(url)

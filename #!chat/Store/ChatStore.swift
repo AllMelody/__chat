@@ -231,6 +231,17 @@ final class ChatStore {
         return sidebarItems.first { $0.id == id }
     }
 
+    /// The sidebar row of the channel or private conversation called `name` on `server`.
+    private func conversation(named name: String, on server: IRCServer) -> SidebarItem? {
+        if let channel = server.channel(named: name) {
+            return SidebarItem(server: server, kind: .channel(channel))
+        }
+        if let pm = server.privateMessage(with: name) {
+            return SidebarItem(server: server, kind: .privateMessage(pm))
+        }
+        return nil
+    }
+
     /// Selects a sidebar row. Entering a conversation counts as reading it, so its
     /// unread badge clears.
     func select(_ item: SidebarItem) {
@@ -294,6 +305,17 @@ final class ChatStore {
     private func noteLogsChanged() {
         logVersion &+= 1
         trimLogs()
+    }
+
+    /// Adds a status line to the log a sidebar row shows.
+    private func log(_ text: String, in item: SidebarItem) {
+        let message = ChatMessage(time: Date(), text: text)
+        switch item.kind {
+        case .server: item.server.log.append(message)
+        case .channel(let channel): channel.log.append(message)
+        case .privateMessage(let pm): pm.log.append(message)
+        }
+        noteLogsChanged()
     }
 
     /// Drops per-message thumbnail state — both the @Observable mirror driving the views and
@@ -461,28 +483,6 @@ final class ChatStore {
             destination = selected
         }
         log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: destination)
-    }
-
-    /// The sidebar row of the channel or private conversation called `name` on `server`.
-    private func conversation(named name: String, on server: IRCServer) -> SidebarItem? {
-        if let channel = server.channel(named: name) {
-            return SidebarItem(server: server, kind: .channel(channel))
-        }
-        if let pm = server.privateMessage(with: name) {
-            return SidebarItem(server: server, kind: .privateMessage(pm))
-        }
-        return nil
-    }
-
-    /// Adds a status line to the log a sidebar row shows.
-    private func log(_ text: String, in item: SidebarItem) {
-        let message = ChatMessage(time: Date(), text: text)
-        switch item.kind {
-        case .server: item.server.log.append(message)
-        case .channel(let channel): channel.log.append(message)
-        case .privateMessage(let pm): pm.log.append(message)
-        }
-        noteLogsChanged()
     }
 
     private func serverDidChangeNick(_ server: IRCServer, to nick: String) {

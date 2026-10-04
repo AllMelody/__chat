@@ -393,13 +393,8 @@ final class IRCConnectionService {
     // MARK: - Channel Operations
     
     func joinChannel(_ name: String, key: String? = nil, on server: IRCServer) {
-        guard let client = clients[server.id] else {
+        guard let client = clients[server.id], client.isRegistered else {
             handleSendFailure(for: server, reason: "Cannot join channel: Not connected")
-            return
-        }
-
-        guard isRegistered(server.id) else {
-            handleSendFailure(for: server, reason: "Cannot join channel: Not registered")
             return
         }
 
