@@ -128,16 +128,22 @@ final class ImageCacheService {
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path(percentEncoded: false))
 
         // Store in memory cache for next time
-        imageCache.setObject(image, forKey: cacheKey as NSString)
+        imageCache.setObject(image, forKey: cacheKey as NSString, cost: Self.memoryCost(of: image))
         return image
+    }
+
+    /// Roughly what an image costs in memory once drawn (4 bytes a pixel), so the memory
+    /// cache's total cost limit means something.
+    private static func memoryCost(of image: NSImage) -> Int {
+        image.representations.map { $0.pixelsWide * $0.pixelsHigh * 4 }.max() ?? 0
     }
     
     // MARK: - Thumbnail Processing
 
     /// Forgets the in-memory thumbnail entries (and the NSImages they hold strongly) for
     /// messages that no longer exist — trimmed past the log cap, or removed along with their
-    /// channel/PM/server. The NSCache and disk caches are untouched: they're URL-keyed and
-    /// bounded on their own.
+    /// channel/PM/server. Images still loading for them are dropped when they arrive. The
+    /// NSCache and disk caches are untouched: they're URL-keyed and bounded on their own.
     func discardThumbnails(for messageIDs: [UUID]) {
         for id in messageIDs {
             messageThumbnails.removeValue(forKey: id)
@@ -147,7 +153,7 @@ final class ImageCacheService {
     /// Sets the loaded image for `url` in a message's thumbnail list (appending the entry if
     /// it's new) and publishes the updated list.
     private func setThumbnailImage(_ image: NSImage, url: String, messageID: UUID) {
-        var list = messageThumbnails[messageID] ?? []
+        guard var list = messageThumbnails[messageID] else { return }   // discarded meanwhile
         if let idx = list.firstIndex(where: { $0.url == url }) {
             list[idx].image = image
         } else {
@@ -159,7 +165,7 @@ final class ImageCacheService {
 
     /// Reserves a not-yet-loaded thumbnail slot for `url`; publishes only if one was added.
     private func addThumbnailPlaceholder(url: String, messageID: UUID) {
-        var list = messageThumbnails[messageID] ?? []
+        guard var list = messageThumbnails[messageID] else { return }   // discarded meanwhile
         guard !list.contains(where: { $0.url == url }) else { return }
         list.append(MessageThumbnail(url: url, image: nil))
         messageThumbnails[messageID] = list
@@ -169,25 +175,33 @@ final class ImageCacheService {
     func scanMessageForThumbnails(_ message: ChatMessage, showImageThumbnails: Bool) {
         guard showImageThumbnails else { return }
         let text = message.text
-        let range = NSRange(location: 0, length: (text as NSString).length)
+        var links: [URL] = []
         var seen = Set<String>()
-        linkDetector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
-            guard let u = result?.url, ["http", "https"].contains(u.scheme?.lowercased() ?? "") else { return }
-            let key = u.absoluteString
-            guard seen.insert(key).inserted else { return }
+        linkDetector.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: (text as NSString).length)) { result, _, _ in
+            guard let url = result?.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  seen.insert(url.absoluteString).inserted else { return }
+            links.append(url)
+        }
+        guard !links.isEmpty else { return }
+
+        // The message has an entry from now until it's discarded, which is how results that
+        // arrive after that know to go nowhere.
+        messageThumbnails[message.id] = []
+        for url in links {
+            let key = url.absoluteString
             // YouTube: we know the thumbnail URL without a HEAD request
-            if let ytThumbURL = Self.youTubeThumbnailURL(for: u) {
-                if let cachedImage = self.cachedImage(for: key) {
-                    self.setThumbnailImage(cachedImage, url: key, messageID: message.id)
+            if let ytThumbURL = Self.youTubeThumbnailURL(for: url) {
+                if let cachedImage = cachedImage(for: key) {
+                    setThumbnailImage(cachedImage, url: key, messageID: message.id)
                 } else {
-                    self.addThumbnailPlaceholder(url: key, messageID: message.id)
-                    self.fetchImage(urlString: ytThumbURL, messageID: message.id, displayURL: key)
+                    addThumbnailPlaceholder(url: key, messageID: message.id)
+                    fetchImage(urlString: ytThumbURL, messageID: message.id, displayURL: key)
                 }
             } else {
-                if let cached = self.linkCache[key], cached.contentType.lowercased().hasPrefix("image/") {
-                    self.addThumbnailPlaceholder(url: key, messageID: message.id)
+                if let cached = linkCache[key], cached.contentType.lowercased().hasPrefix("image/") {
+                    addThumbnailPlaceholder(url: key, messageID: message.id)
                 }
-                self.fetchThumbnailIfNeeded(for: key, messageID: message.id)
+                fetchThumbnailIfNeeded(for: key, messageID: message.id)
             }
         }
     }
@@ -215,10 +229,7 @@ final class ImageCacheService {
     private func fetchThumbnailIfNeeded(for urlString: String, messageID: UUID) {
         // First check if we have a cached image
         if let cachedImage = cachedImage(for: urlString) {
-            // Published asynchronously, like the network-fetched paths.
-            Task {
-                self.setThumbnailImage(cachedImage, url: urlString, messageID: messageID)
-            }
+            setThumbnailImage(cachedImage, url: urlString, messageID: messageID)
             return
         }
         
@@ -265,30 +276,43 @@ final class ImageCacheService {
         let fileURL = imageCacheDirectory.appending(path: "\(memoryKey).cache")
 
         Task { [weak self] in
-            let data: Data
+            let data: Data?
             do {
-                (data, _) = try await URLSession.shared.data(for: request)
+                data = try await Self.download(request)
             } catch {
                 // Unreachable images are expected in chat; log and skip the thumbnail.
                 Self.logger.info("Image fetch failed for \(urlString): \(String(describing: error))")
                 return
             }
 
-            guard let cg = await Self.makeThumbnail(from: data, cachingPNGAt: fileURL),
+            guard let data, let cg = await Self.makeThumbnail(from: data, cachingPNGAt: fileURL),
                   let self else { return }
 
             let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-            self.imageCache.setObject(img, forKey: memoryKey as NSString)
+            self.imageCache.setObject(img, forKey: memoryKey as NSString, cost: Self.memoryCost(of: img))
             self.setThumbnailImage(img, url: cacheKey, messageID: messageID)
         }
+    }
+
+    /// Images bigger than this get no thumbnail.
+    private nonisolated static let maximumImageSize = 10 * 1024 * 1024
+
+    /// Downloads an image off the main actor; nil when it's too big. It goes to a file first,
+    /// so a link to some huge file can't fill up memory.
+    @concurrent
+    private nonisolated static func download(_ request: URLRequest) async throws -> Data? {
+        let (file, _) = try await URLSession.shared.download(for: request)
+        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        let data = size <= maximumImageSize ? try Data(contentsOf: file) : nil
+        try FileManager.default.removeItem(at: file)
+        return data
     }
 
     /// Decodes a downscaled thumbnail and writes it to the disk cache, off the main actor.
     /// Returns a CGImage (Sendable) rather than an NSImage so it can cross back to main.
     @concurrent
     private nonisolated static func makeThumbnail(from data: Data, cachingPNGAt fileURL: URL) async -> CGImage? {
-        guard !data.isEmpty, data.count < 10 * 1024 * 1024 else { return nil }
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        guard !data.isEmpty, let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
 
         let maxPixelSize = 600
         let opts: [CFString: Any] = [
