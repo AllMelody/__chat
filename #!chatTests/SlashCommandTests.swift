@@ -20,6 +20,9 @@ struct SlashCommandTests {
         ("/QUIT", .quit),                                                           // case-insensitive
         ("/wat", .unknown("wat")),
         ("/", .unknown("")),                                                        // bare slash
+        ("//join swift", .text("/join swift")),                                     // "//" escapes the slash
+        ("//", .text("/")),
+        ("///", .text("//")),                                                       // only one slash is dropped
     ] as [(String, MessageRouter.ParsedCommand)])
     func `Parses composer input`(input: String, expected: MessageRouter.ParsedCommand) {
         #expect(MessageRouter.parse(input) == expected)

@@ -6,7 +6,7 @@ enum MessageRouter {
     /// Result of parsing a composer input line. Pure data — no side effects — so it can be
     /// unit-tested independently of connections and view state.
     enum ParsedCommand: Equatable {
-        case text(String)                       // non-slash plain message (may be empty)
+        case text(String)                       // plain message (may be empty); "//" sends a leading "/"
         case join(channel: String, key: String?)
         case part(target: String?)              // nil = part the currently-selected channel
         case nick(String)
@@ -23,6 +23,8 @@ enum MessageRouter {
     static func parse(_ raw: String) -> ParsedCommand {
         let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard input.hasPrefix("/") else { return .text(input) }
+        // "//" escapes a leading slash: "//shrug" sends the text "/shrug".
+        if input.hasPrefix("//") { return .text(String(input.dropFirst())) }
 
         let noSlash = String(input.dropFirst())
         var parts = noSlash.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true).map(String.init)
