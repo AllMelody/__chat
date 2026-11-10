@@ -24,6 +24,7 @@ struct ChatApp: App {
             .environment(preferences)
             .commands {
                 CloseCommands()
+                FindCommands()
 
                 CommandMenu("Server") {
                     Button("Add Server…") { model.isPresentingAddServer = true }
@@ -59,6 +60,28 @@ struct ChatApp: App {
             PreferencesView()
                 .environment(preferences)
                 .environment(model)
+        }
+    }
+}
+
+/// Edit ▸ Find searches the log on screen, in a find bar above it, whichever view has keyboard
+/// focus: it's the only text there is to search. (SwiftUI's own Find commands go to the
+/// focused view, which is nearly always the composer.)
+struct FindCommands: Commands {
+    /// Set only while the main window is key.
+    @FocusedValue(ChatStore.self) private var model
+
+    var body: some Commands {
+        CommandGroup(replacing: .textEditing) {
+            Button("Find…") { model?.find(.showFindInterface) }
+                .keyboardShortcut("f")
+                .disabled(model == nil)
+            Button("Find Next") { model?.find(.nextMatch) }
+                .keyboardShortcut("g")
+                .disabled(model == nil)
+            Button("Find Previous") { model?.find(.previousMatch) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(model == nil)
         }
     }
 }

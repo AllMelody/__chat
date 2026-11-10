@@ -11,6 +11,8 @@ final class IRCChannel: Identifiable {
     private(set) var users: [String] = []
     var log: [ChatMessage] = []
     var unreadCount: Int = 0
+    /// How many of the unread messages mention us.
+    var mentionCount: Int = 0
     var joined: Bool = false
     /// We were kicked out and haven't rejoined since. Reconnecting doesn't rejoin it either:
     /// going back is the user's call.

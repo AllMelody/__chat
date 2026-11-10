@@ -82,13 +82,17 @@ struct ContentView: View {
             }
             // No leading padding here: the log's left gutter comes from the text view's
             // container inset, so highlight washes can run edge to edge.
-            LogTextView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails)
+            LogTextView(logVersion: model.logVersion, selectionToken: model.selectedNodeID, messages: currentMessages, thumbnailsByMessage: model.messageThumbnails, showThumbnails: prefs.showImageThumbnails,
+                        findRequest: model.findRequest, onFindBarClosed: focusComposer)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, 2)
 
             Divider()
-            ComposerTextField(text: $draft, placeholder: "Type a message…", focusRequest: composerFocusRequest) {
-                if model.handleInputFromComposer(draft) { draft = "" }
+            ComposerTextField(text: $draft, placeholder: "Type a message…", focusRequest: composerFocusRequest,
+                              completions: { model.nickCompletionCandidates }) {
+                guard model.handleInputFromComposer(draft) else { return false }
+                draft = ""
+                return true
             }
             .padding(.leading, 6)
             .padding(.trailing, 4)
@@ -150,6 +154,7 @@ struct ContentView: View {
                             ConversationRow(
                                 node: node,
                                 unreadCount: ch.unreadCount,
+                                wantsAttention: ch.mentionCount > 0,
                                 isSelected: model.selectedNodeID == ch.id,
                                 rowHeight: rowHeight,
                                 iconColWidth: iconColWidth,
@@ -166,6 +171,7 @@ struct ContentView: View {
                             ConversationRow(
                                 node: node,
                                 unreadCount: pm.unreadCount,
+                                wantsAttention: pm.unreadCount > 0,   // all of it was said to us
                                 isSelected: model.selectedNodeID == pm.id,
                                 rowHeight: rowHeight,
                                 iconColWidth: iconColWidth,
@@ -209,7 +215,11 @@ private struct ComposerTextField: NSViewRepresentable {
     let placeholder: String
     /// Each change moves keyboard focus into the field.
     let focusRequest: Int
-    let onSubmit: () -> Void
+    /// The nicknames Tab can complete to here, likeliest first. Asked for when Tab is pressed.
+    let completions: () -> [String]
+    /// Return was pressed. Says whether the line was dealt with, which is what puts it in the
+    /// history that ↑ and ↓ go through.
+    let onSubmit: () -> Bool
 
     /// Newlines show as this symbol, so the field stays one line; the binding `text` keeps the
     /// real newlines for sending. Unlike the `\n` it stands for, nobody types it.
@@ -268,6 +278,12 @@ private struct ComposerTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerTextField
         var lastFocusRequest: Int
+        private var history = InputHistory()
+        /// The nickname Tab last put in, for as long as the text stays as that left it: which
+        /// of the matches it is, and where it sits. Another Tab swaps in the next match.
+        private var completion: (matches: [String], index: Int, range: NSRange)?
+        /// Set while a completion is going in, the one text change that doesn't end it.
+        private var isCompleting = false
 
         init(_ parent: ComposerTextField) {
             self.parent = parent
@@ -277,6 +293,7 @@ private struct ComposerTextField: NSViewRepresentable {
         func controlTextDidChange(_ obj: Notification) {
             guard let tf = obj.object as? NSTextField else { return }
             parent.text = ComposerTextField.unflatten(tf.stringValue)
+            if !isCompleting { completion = nil }
             // After every change, so text typed next to a symbol doesn't take its color.
             if tf.stringValue.contains(ComposerTextField.newlineSymbol) {
                 ComposerTextField.colorizeNewlineSymbols(in: tf)
@@ -284,11 +301,57 @@ private struct ComposerTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                parent.onSubmit()
-                return true
+            switch commandSelector {
+            case #selector(NSResponder.insertNewline(_:)):
+                let line = parent.text
+                if parent.onSubmit() { history.add(line) }
+            // Tab and Shift-Tab complete nicknames; neither leaves the field.
+            case #selector(NSResponder.insertTab(_:)):
+                completeNick(in: textView, step: 1)
+            case #selector(NSResponder.insertBacktab(_:)):
+                completeNick(in: textView, step: -1)
+            // In a one-line field there's nowhere up or down to go but through what was sent.
+            case #selector(NSResponder.moveUp(_:)):
+                if let line = history.older(than: parent.text) { replaceText(in: textView, with: line) }
+            case #selector(NSResponder.moveDown(_:)):
+                if let line = history.newer() { replaceText(in: textView, with: line) }
+            default:
+                return false
             }
-            return false
+            return true
+        }
+
+        /// Completes the word before the cursor to a nickname, or, straight after a completion,
+        /// moves on to the match `step` places along.
+        private func completeNick(in textView: NSTextView, step: Int) {
+            let cursor = textView.selectedRange()
+            if let completion, cursor.length == 0, cursor.location == NSMaxRange(completion.range) {
+                let count = completion.matches.count
+                insertCompletion((completion.index + step + count) % count, of: completion.matches,
+                                 replacing: completion.range, in: textView)
+                return
+            }
+            // Offsets are the same with newlines as with the symbols that stand for them.
+            let text = ComposerTextField.unflatten(textView.string)
+            guard cursor.length == 0, let partial = NickCompletion.partialWord(in: text, endingAt: cursor.location) else { return }
+            let matches = NickCompletion.matches(for: (text as NSString).substring(with: partial), among: parent.completions())
+            guard !matches.isEmpty else { return }
+            insertCompletion(0, of: matches, replacing: partial, in: textView)
+        }
+
+        private func insertCompletion(_ index: Int, of matches: [String], replacing range: NSRange, in textView: NSTextView) {
+            let insertion = NickCompletion.insertion(for: matches[index], atStartOfLine: range.location == 0)
+            isCompleting = true
+            textView.insertText(insertion, replacementRange: range)
+            isCompleting = false
+            completion = (matches, index, NSRange(location: range.location, length: (insertion as NSString).length))
+        }
+
+        /// Swaps the field's whole text, as an edit like any other: it reaches the binding and
+        /// can be undone.
+        private func replaceText(in textView: NSTextView, with text: String) {
+            textView.insertText(ComposerTextField.flatten(text),
+                                replacementRange: NSRange(location: 0, length: (textView.string as NSString).length))
         }
     }
 
@@ -381,12 +444,19 @@ private struct LogTextView: NSViewRepresentable {
     let messages: [ChatMessage]
     let thumbnailsByMessage: [UUID: [MessageThumbnail]]
     let showThumbnails: Bool
+    /// The latest Find command (Edit ▸ Find), carried out once when its number is new.
+    let findRequest: ChatStore.FindRequest?
+    /// The find bar went away, leaving keyboard focus on the log, where typing does nothing.
+    let onFindBarClosed: () -> Void
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var lastSelectionToken: UUID?
         var isPinnedToBottom: Bool = true
         var boundsObserver: Any?
         var frameObserver: Any?
+        var findBarObservation: NSKeyValueObservation?
+        var onFindBarClosed: () -> Void = {}
+        var lastFindRequest: Int?
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
         // Incremental rendering bookkeeping: the lines now in textStorage, in order, with the
@@ -452,7 +522,9 @@ private struct LogTextView: NSViewRepresentable {
         // highlight washes span the full view width.
         textView.textContainerInset = NSSize(width: 4, height: 2)
         textView.usesFontPanel = false
+        // Edit ▸ Find shows a find bar above the log, and highlights matches as they're typed.
         textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.isContinuousSpellCheckingEnabled = false
         textView.delegate = context.coordinator
         textView.linkTextAttributes = [
@@ -480,15 +552,22 @@ private struct LogTextView: NSViewRepresentable {
                 tv.scrollToEndOfDocument(nil)
             }
         }
+        coordinator.onFindBarClosed = onFindBarClosed
+        coordinator.findBarObservation = scroll.observe(\.isFindBarVisible, options: [.new]) { [weak coordinator] _, change in
+            guard change.newValue == false else { return }
+            MainActor.assumeIsolated { coordinator?.onFindBarClosed() }
+        }
         _ = apply(messages: messages, to: textView, coordinator: coordinator, forceFullRebuild: true)
         textView.scrollToEndOfDocument(nil)
         coordinator.lastSelectionToken = selectionToken
+        coordinator.lastFindRequest = findRequest?.number
         return scroll
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
         let coordinator = context.coordinator
+        coordinator.onFindBarClosed = onFindBarClosed
 
         let selectionChanged = coordinator.lastSelectionToken != selectionToken
         let dayChanged = coordinator.renderedDay != Calendar.current.startOfDay(for: .now)
@@ -514,6 +593,16 @@ private struct LogTextView: NSViewRepresentable {
                 nsView.reflectScrolledClipView(nsView.contentView)
             }
             CATransaction.commit()
+        }
+
+        if let findRequest, coordinator.lastFindRequest != findRequest.number {
+            coordinator.lastFindRequest = findRequest.number
+            // The text finder works for the view with keyboard focus, and takes its action from
+            // a menu item's tag.
+            textView.window?.makeFirstResponder(textView)
+            let item = NSMenuItem()
+            item.tag = findRequest.action.rawValue
+            textView.performTextFinderAction(item)
         }
     }
 
@@ -893,6 +982,8 @@ struct ServerRow: View {
 struct ConversationRow: View {
     let node: SidebarItem
     let unreadCount: Int
+    /// Some of what's unread was meant for us (a mention, a private message): the badge is red.
+    let wantsAttention: Bool
     let isSelected: Bool
     let rowHeight: CGFloat
     let iconColWidth: CGFloat
@@ -908,7 +999,7 @@ struct ConversationRow: View {
                 .overlay(alignment: .topTrailing) {
                     if unreadCount > 0 {
                         Circle()
-                            .fill(Color.accentColor)
+                            .fill(wantsAttention ? Color.red : Color.accentColor)
                             .frame(width: 6, height: 6)
                             .offset(x: 2, y: -2)
                     }

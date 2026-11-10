@@ -11,7 +11,8 @@ A native macOS IRC client built with SwiftUI and Network.framework.
 - Passwords stored in the macOS Keychain
 - Inline image thumbnails
 - Flood-protected send queue
-- Multi-line composer with channel topics
+- Multi-line composer with channel topics, nick completion (Tab) and history (↑/↓)
+- Find in the log (⌘F)
 - Some slash commands (`/join`, `/part`, `/nick`, `/msg`, …); start a message with `//` to send a leading `/`
 
 ## Building

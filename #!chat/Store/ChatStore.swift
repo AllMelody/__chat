@@ -34,16 +34,26 @@ final class ChatStore {
     var isPresentingCloseConversation: Bool = false
     var pendingCloseConversationID: UUID?
     var isPresentingTopicEditor: Bool = false
+
+    /// A Find command for the log on screen (Edit ▸ Find). Numbered, so that asking for the
+    /// same thing twice counts twice.
+    struct FindRequest: Equatable {
+        var action: NSTextFinder.Action
+        var number: Int
+    }
+    var findRequest: FindRequest?
     
     // Preferences
     weak var preferences: AppPreferences? { didSet { mirrorPreferencesToServices() } }
     @ObservationIgnored private var preferencesMirrorTask: Task<Void, Never>?
+    @ObservationIgnored private var dockBadgeTask: Task<Void, Never>?
     @ObservationIgnored private var applicationObservers: [any NSObjectProtocol] = []
     
     init() {
         setupServices()
         loadServers()
         observeApplication()
+        mirrorAttentionToDock()
         // Unit tests run inside the app, which mustn't go connecting to servers meanwhile.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Delay auto-connect to ensure UI is ready
@@ -73,10 +83,15 @@ final class ChatStore {
         }
     }
 
-    /// Tells the servers goodbye when the app quits.
+    /// Follows the app coming to the front, which counts as reading the conversation on
+    /// screen, and quitting, when the servers are told goodbye.
     private func observeApplication() {
+        let center = NotificationCenter.default
         applicationObservers = [
-            NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.markSelectionRead() }
+            },
+            center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.connectionService.quitAllBeforeTermination() }
             },
         ]
@@ -88,6 +103,26 @@ final class ChatStore {
     /// the one selected.
     private func isOnScreen(_ nodeID: UUID) -> Bool {
         NSApp.isActive && selectedNodeID == nodeID
+    }
+
+    /// What's waiting that was meant for us: unread private messages, and unread mentions in
+    /// channels.
+    var attentionCount: Int {
+        servers.reduce(0) { total, server in
+            total + server.channels.reduce(0) { $0 + $1.mentionCount }
+                + server.privateMessages.reduce(0) { $0 + $1.unreadCount }
+        }
+    }
+
+    /// Shows `attentionCount` as the Dock icon's badge. Observations emits the current value
+    /// first, then every change.
+    private func mirrorAttentionToDock() {
+        let counts = Observations { [weak self] in self?.attentionCount ?? 0 }
+        dockBadgeTask = Task {
+            for await count in counts {
+                NSApplication.shared.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+            }
+        }
     }
 
     /// Posts a macOS notification about a message, unless the user is plainly already
@@ -291,10 +326,36 @@ final class ChatStore {
     func select(_ item: SidebarItem) {
         selectedNodeID = item.id
         switch item.kind {
-        case .channel(let channel): channel.unreadCount = 0
+        case .channel(let channel):
+            channel.unreadCount = 0
+            channel.mentionCount = 0
         case .privateMessage(let pm): pm.unreadCount = 0
         case .server: break
         }
+    }
+
+    /// The app came to the front: the conversation selected is on screen again, and read.
+    private func markSelectionRead() {
+        if let selectedItem { select(selectedItem) }
+    }
+
+    /// Whom Tab completes to in the conversation on screen: a channel's members, or the
+    /// other side of a private conversation.
+    var nickCompletionCandidates: [String] {
+        guard let selection = selectedItem else { return [] }
+        switch selection.kind {
+        case .server:
+            return []
+        case .channel(let channel):
+            return NickCompletion.candidates(members: channel.users, log: channel.log, ownNick: selection.server.currentNick)
+        case .privateMessage(let pm):
+            return [pm.nickname]
+        }
+    }
+
+    /// Passes a Find command on to the log view.
+    func find(_ action: NSTextFinder.Action) {
+        findRequest = FindRequest(action: action, number: (findRequest?.number ?? 0) + 1)
     }
 
     /// Moves the sidebar selection by `offset` (wrapping).
@@ -571,7 +632,8 @@ final class ChatStore {
 
         // Nothing to de-duplicate: lines this client sends never come back from the server
         // (see IRCConnectionService.sendSingleLine); isFromMe ones were sent from elsewhere.
-        // Either way, our own lines never count as unread.
+        // Either way, our own lines never count as unread, and nor does anything that
+        // arrives in front of the user.
         case .channel(let name):
             let channel = server.getOrCreateChannel(named: name)
             channel.log.append(message)
@@ -580,8 +642,9 @@ final class ChatStore {
                 notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message, on: server, nodeID: channel.id)
             }
 
-            if !message.isFromMe, selectedNodeID != channel.id {
+            if !message.isFromMe, !isOnScreen(channel.id) {
                 channel.unreadCount += 1
+                if message.isHighlight { channel.mentionCount += 1 }
             }
 
         case .privateMessage(let peer):
@@ -593,7 +656,7 @@ final class ChatStore {
                 notify("Message from \(peer)", about: message, on: server, nodeID: pm.id)
             }
 
-            if !message.isFromMe, selectedNodeID != pm.id {
+            if !message.isFromMe, !isOnScreen(pm.id) {
                 pm.unreadCount += 1
             }
         }
