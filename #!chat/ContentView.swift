@@ -189,8 +189,12 @@ struct ContentView: View {
     private func separator() -> some View { Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: onePixel) }
 
     // MARK: - Data accessors
+    /// All of the stored log, which ChatStore.trimLogs keeps near the preferred length by
+    /// dropping a batch of old lines now and then. Showing a window of exactly that length
+    /// instead would lose a line at the top for each one gained, an edit of the whole text
+    /// every time.
     private var currentMessages: [ChatMessage] {
-        Array((model.selectedItem?.log ?? []).suffix(max(1, prefs.maxLogLines)))
+        model.selectedItem?.log ?? []
     }
     private var currentUsers: [String] {
         (model.selectedItem?.channel?.users ?? []).sorted(using: .localizedStandard)
@@ -324,7 +328,12 @@ private struct ComposerTextField: NSViewRepresentable {
         context.coordinator.parent = self
         if context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
-            tf.window?.makeFirstResponder(tf)
+            // Not when it already has focus: AppKit selects all the text of a field that takes
+            // focus, and the next key would replace a half-typed message. For the same reason
+            // a draft that regains focus gets its insertion point back at the end.
+            if tf.currentEditor() == nil, tf.window?.makeFirstResponder(tf) == true {
+                tf.currentEditor()?.selectedRange = NSRange(location: (tf.stringValue as NSString).length, length: 0)
+            }
         }
         let flat = Self.flatten(text)
         if tf.stringValue != flat {
@@ -365,6 +374,7 @@ private final class LogLayoutManager: NSLayoutManager {
 }
 
 private struct LogTextView: NSViewRepresentable {
+    /// Bumped on every log change in the app; being a property is what gets the view updated.
     let logVersion: Int
     let selectionToken: UUID?
     let messages: [ChatMessage]
@@ -378,12 +388,11 @@ private struct LogTextView: NSViewRepresentable {
         var frameObserver: Any?
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
-        var lastContentSignature: Int = 0
-        var lastContentHeight: CGFloat = 0
-        // Incremental rendering bookkeeping: ordered ids currently in textStorage, and the
-        // thumbnail fingerprint of each, so apply() can choose append-fast-path vs full rebuild.
-        var lastRenderedIDs: [UUID] = []
-        var renderedThumbFingerprints: [UUID: Int] = [:]
+        // Incremental rendering bookkeeping: the lines now in textStorage, in order, with the
+        // thumbnail fingerprint each was rendered with (to plan the next update from) and its
+        // length in the storage (to find where each one sits).
+        var renderedLines: [LogUpdate.Line] = []
+        var renderedLengths: [Int] = []
         /// Start of the day the storage was last fully rendered on. Timestamps leave the date
         /// off for "today", so once the day turns every line needs re-rendering.
         var renderedDay: Date?
@@ -397,15 +406,13 @@ private struct LogTextView: NSViewRepresentable {
             }
         }
 
+        /// Opens links in the browser. Everything rendered as a link is a web link already
+        /// (Formatting.webLinks); checking again here keeps a click from ever opening anything else.
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            if let url = link as? URL {
-                NSWorkspace.shared.open(url)
-                return true
-            } else if let str = link as? String, let url = URL(string: str) {
-                NSWorkspace.shared.open(url)
-                return true
-            }
-            return false
+            let url = link as? URL ?? (link as? String).flatMap(URL.init(string:))
+            guard let url, ["http", "https"].contains(url.scheme?.lowercased()) else { return false }
+            NSWorkspace.shared.open(url)
+            return true
         }
     }
 
@@ -472,55 +479,41 @@ private struct LogTextView: NSViewRepresentable {
                 tv.scrollToEndOfDocument(nil)
             }
         }
-        apply(messages: messages, to: textView, coordinator: coordinator, forceFullRebuild: true)
+        _ = apply(messages: messages, to: textView, coordinator: coordinator, forceFullRebuild: true)
         textView.scrollToEndOfDocument(nil)
         coordinator.lastSelectionToken = selectionToken
-        coordinator.lastContentHeight = textView.bounds.height
         return scroll
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
+        let coordinator = context.coordinator
 
-        let signature: Int = {
-            var hash = messages.count
-            hash = hash &* 31 &+ logVersion
-            hash = hash &* 31 &+ (selectionToken?.hashValue ?? 0)
-            
-            // Only calculate hash for visible messages if there are many
-            let messagesToHash = messages.count > 1000 ? Array(messages.suffix(100)) : messages
-            for m in messagesToHash {
-                let arr = thumbnailsByMessage[m.id] ?? []
-                hash = hash &* 31 &+ arr.count
-                let loadedCount = arr.count(where: { $0.image != nil })
-                hash = hash &* 31 &+ loadedCount
-            }
-            return hash
-        }()
-        let selectionChanged = (context.coordinator.lastSelectionToken != selectionToken)
-        let dayChanged = (context.coordinator.renderedDay != Calendar.current.startOfDay(for: .now))
-        if context.coordinator.lastContentSignature != signature || dayChanged {
-            apply(messages: messages, to: textView, coordinator: context.coordinator, forceFullRebuild: selectionChanged || dayChanged)
-            context.coordinator.lastContentSignature = signature
-        }
+        let selectionChanged = coordinator.lastSelectionToken != selectionToken
+        let dayChanged = coordinator.renderedDay != Calendar.current.startOfDay(for: .now)
+        if selectionChanged { coordinator.isPinnedToBottom = true }
+        // Where the reader is, before the text changes under them.
+        let followsNewLines = coordinator.isPinnedToBottom
+        let origin = nsView.contentView.bounds.origin
 
-        if selectionChanged { context.coordinator.isPinnedToBottom = true }
+        let removedHeight = apply(messages: messages, to: textView, coordinator: coordinator, forceFullRebuild: selectionChanged || dayChanged)
+        coordinator.lastSelectionToken = selectionToken
 
-        // Ensure layout to measure content height change accurately
-        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
-        let newHeight = textView.bounds.height
-        let grew = newHeight - context.coordinator.lastContentHeight > 0.5
-
-        if selectionChanged || (context.coordinator.isPinnedToBottom && grew) {
+        if let removedHeight {
+            textView.layoutManager?.ensureLayout(for: textView.textContainer!)
             // Use CATransaction to disable implicit animations that cause flickering
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            textView.scrollToEndOfDocument(nil)
+            if followsNewLines {
+                textView.scrollToEndOfDocument(nil)
+            } else if removedHeight > 0 {
+                // Lines trimmed off the top would pull the text up from under someone reading
+                // back; move the view up with it.
+                nsView.contentView.scroll(to: NSPoint(x: origin.x, y: max(0, origin.y - removedHeight)))
+                nsView.reflectScrolledClipView(nsView.contentView)
+            }
             CATransaction.commit()
         }
-
-        context.coordinator.lastSelectionToken = selectionToken
-        context.coordinator.lastContentHeight = newHeight
     }
 
     // Cache commonly used attributes for performance
@@ -531,9 +524,6 @@ private struct LogTextView: NSViewRepresentable {
         return paragraph
     }()
     
-    // Link-only data detectors can't fail to initialize.
-    private static let sharedLinkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-
     private static let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
 
     /// Background for lines that mention our nick. systemYellow adapts to light/dark; the
@@ -566,74 +556,80 @@ private struct LogTextView: NSViewRepresentable {
     private static let myNickAttributes = textAttributes(NSColor(calibratedHue: 0.0, saturation: 0.75, brightness: 0.55, alpha: 1.0))
     private static let otherNickAttributes = textAttributes(NSColor(calibratedHue: 0.13, saturation: 0.75, brightness: 0.55, alpha: 1.0))
 
-    /// `text` in `attributes`, with detected URLs made clickable.
+    /// `text` in `attributes`, with its web links made clickable.
     private static func linkified(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSMutableAttributedString {
         let result = NSMutableAttributedString(string: text, attributes: attributes)
-        let range = NSRange(location: 0, length: (text as NSString).length)
-        sharedLinkDetector.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
-            guard let match, let url = match.url else { return }
-            result.addAttribute(.link, value: url, range: match.range)
+        for link in Formatting.webLinks(in: text) {
+            result.addAttribute(.link, value: link.url, range: link.range)
         }
         return result
     }
 
-    private func apply(messages: [ChatMessage], to textView: NSTextView, coordinator: Coordinator, forceFullRebuild: Bool) {
-        guard let storage = textView.textStorage else { return }
-        let newIDs = messages.map { $0.id }
-        let prior = coordinator.lastRenderedIDs
-        let renderedThumbnailsAreCurrent = prior.allSatisfy {
-            coordinator.renderedThumbFingerprints[$0] == thumbnailFingerprint(for: $0)
-        }
+    /// Brings the rendered text up to date with `messages`. Returns nil when nothing shown
+    /// here changed; otherwise the height of what went from above the text that stayed (lines
+    /// trimmed off the front), which is what it takes to keep a reader's place.
+    private func apply(messages: [ChatMessage], to textView: NSTextView, coordinator: Coordinator, forceFullRebuild: Bool) -> CGFloat? {
+        guard let storage = textView.textStorage, let layoutManager = textView.layoutManager else { return nil }
+        let lines = messages.map { LogUpdate.Line(id: $0.id, thumbnails: thumbnailFingerprint(for: $0.id)) }
+        let separator = NSAttributedString(string: "\n", attributes: Self.baseAttributes)
+        var removedHeight: CGFloat = 0
 
-        // logVersion bumps for every log in the app, so most updates come from some other
-        // conversation. When nothing shown here changed, keep the storage — rebuilding it would
-        // also throw away the user's text selection.
-        if !forceFullRebuild && newIDs == prior && renderedThumbnailsAreCurrent { return }
+        switch forceFullRebuild ? .rebuild : LogUpdate.plan(from: coordinator.renderedLines, to: lines) {
+        case .none:
+            // logVersion bumps for every log in the app, so most updates come from some other
+            // conversation, and leave this one's text alone.
+            return nil
 
-        // Append-fast-path is valid ONLY when the new list is a pure suffix-append of what we
-        // already rendered (identical prefix, strictly more at the end) AND no already-rendered
-        // message changed its thumbnail fingerprint. Anything else — selection change, front
-        // truncation from maxLogLines, or a thumbnail loading on an existing message — falls
-        // back to a full rebuild.
-        let canAppend = !forceFullRebuild
-            && newIDs.count > prior.count
-            && newIDs.starts(with: prior)
-            && renderedThumbnailsAreCurrent
-
-        if canAppend {
-            let appended = NSMutableAttributedString()
-            // The existing storage has no trailing newline, so the first new message needs a
-            // separator if there is already content.
-            var needsSeparator = !prior.isEmpty && storage.length > 0
-            for msg in messages.suffix(newIDs.count - prior.count) {
-                if needsSeparator { appended.append(NSAttributedString(string: "\n", attributes: Self.baseAttributes)) }
-                needsSeparator = true
-                appended.append(attributedString(for: msg))
-            }
-            storage.append(appended)
-        } else {
+        case .rebuild:
             let combined = NSMutableAttributedString()
-            for (idx, msg) in messages.enumerated() {
-                combined.append(attributedString(for: msg))
-                if idx < messages.count - 1 {
-                    combined.append(NSAttributedString(string: "\n", attributes: Self.baseAttributes))
-                }
+            var lengths: [Int] = []
+            for message in messages {
+                if !lengths.isEmpty { combined.append(separator) }
+                let line = attributedString(for: message)
+                combined.append(line)
+                lengths.append(line.length)
             }
             storage.setAttributedString(combined)
+            coordinator.renderedLengths = lengths
             coordinator.renderedDay = Calendar.current.startOfDay(for: .now)
+
+        // The storage holds the lines with a newline between each two and none at the end. At
+        // least one rendered line stays, so every line dropped or added has one beside it.
+        // Each step is an edit of its own: AppKit moves the selection along with single edits,
+        // but drops it over a batch of them.
+        case .edit(let dropped, let changed, let appendFrom):
+            var lengths = Array(coordinator.renderedLengths[dropped...])
+            if dropped > 0 {
+                let removedLength = coordinator.renderedLengths[..<dropped].reduce(0) { $0 + $1 + 1 }
+                let firstKeptGlyph = layoutManager.glyphIndexForCharacter(at: removedLength)
+                removedHeight = layoutManager.lineFragmentRect(forGlyphAt: firstKeptGlyph, effectiveRange: nil).minY
+                storage.deleteCharacters(in: NSRange(location: 0, length: removedLength))
+            }
+            for index in changed {
+                let location = lengths[..<index].reduce(0) { $0 + $1 + 1 }
+                let line = attributedString(for: messages[index])
+                storage.replaceCharacters(in: NSRange(location: location, length: lengths[index]), with: line)
+                lengths[index] = line.length
+            }
+            if appendFrom < messages.count {
+                let appended = NSMutableAttributedString()
+                for message in messages[appendFrom...] {
+                    let line = attributedString(for: message)
+                    appended.append(separator)
+                    appended.append(line)
+                    lengths.append(line.length)
+                }
+                storage.append(appended)
+            }
+            coordinator.renderedLengths = lengths
         }
 
-        // Single bookkeeping exit point keeps the next diff accurate.
-        coordinator.lastRenderedIDs = newIDs
-        coordinator.renderedThumbFingerprints = Dictionary(
-            newIDs.map { ($0, thumbnailFingerprint(for: $0)) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        coordinator.renderedLines = lines
+        return removedHeight
     }
 
-    /// Stable fingerprint of a message's thumbnails (count + how many images have loaded).
-    /// Mirrors the per-message hashing in updateNSView's signature so a thumbnail load both
-    /// invalidates the signature AND forces that message to be re-rendered via full rebuild.
+    /// Stable fingerprint of a message's thumbnails (count + how many images have loaded), so
+    /// that a thumbnail loading, or the preference to show them changing, renders its line again.
     private func thumbnailFingerprint(for id: UUID) -> Int {
         guard showThumbnails else { return 0 }
         let arr = thumbnailsByMessage[id] ?? []
@@ -644,7 +640,7 @@ private struct LogTextView: NSViewRepresentable {
     }
 
     /// Renders ONE message (time + nick/body or plain text + optional thumbnail block) WITHOUT
-    /// a trailing inter-message newline. Shared by the full-rebuild and append paths so the two
+    /// a trailing inter-message newline. Shared by the full-rebuild and edit paths so the two
     /// produce byte-identical output for the same message.
     private func attributedString(for msg: ChatMessage) -> NSAttributedString {
         let attrs = Self.baseAttributes

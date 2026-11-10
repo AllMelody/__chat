@@ -30,9 +30,6 @@ final class ImageCacheService {
     private var linkCache: [String: LinkCacheEntry] = [:] { didSet { persistLinkCache() } }
     private var linkCacheSaveTask: Task<Void, any Error>?
 
-    // Link-only data detectors can't fail to initialize.
-    private let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-
     init() {
         setupImageCache()
         loadLinkCacheAndPrune()
@@ -174,15 +171,9 @@ final class ImageCacheService {
 
     func scanMessageForThumbnails(_ message: ChatMessage, showImageThumbnails: Bool) {
         guard showImageThumbnails else { return }
-        let text = message.text
-        let range = NSRange(location: 0, length: (text as NSString).length)
-        var links: [URL] = []
+        // The same links the log makes clickable, each once.
         var seen = Set<String>()
-        linkDetector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
-            guard let url = result?.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-                  seen.insert(url.absoluteString).inserted else { return }
-            links.append(url)
-        }
+        let links = Formatting.webLinks(in: message.text).map(\.url).filter { seen.insert($0.absoluteString).inserted }
         guard !links.isEmpty else { return }
 
         // The message has an entry from now until it's discarded, which is how results that

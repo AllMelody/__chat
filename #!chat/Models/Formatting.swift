@@ -37,6 +37,31 @@ enum Formatting {
         }
     }
 
+    // MARK: - Links
+
+    // Link-only data detectors can't fail to initialize.
+    private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// The web links in `text` and where they are: what the log makes clickable and what gets a
+    /// thumbnail.
+    ///
+    /// Only http and https count. The detector also finds mail addresses and links such as
+    /// `ssh://` or `file://`, which a click on something a stranger said shouldn't open. And a
+    /// name written without its scheme is a link only when it looks like one (`www.example.com`,
+    /// `example.com/page`): `main.rs` and `foo.pl` are host names too, but in chat they're files.
+    static func webLinks(in text: String) -> [(range: NSRange, url: URL)] {
+        let string = text as NSString
+        var links: [(range: NSRange, url: URL)] = []
+        linkDetector.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: string.length)) { match, _, _ in
+            guard let match, let url = match.url, let scheme = url.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme) else { return }
+            let written = string.substring(with: match.range).lowercased()
+            guard written.hasPrefix("\(scheme)://") || written.hasPrefix("www.") || written.contains("/") else { return }
+            links.append((match.range, url))
+        }
+        return links
+    }
+
     // MARK: - Nick mention (highlight) detection
 
     /// Characters that can be part of an IRC nickname (RFC 2812: letters, digits, and
