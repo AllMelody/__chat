@@ -9,6 +9,9 @@ final class IRCServer: Identifiable {
     var port: Int
     var password: String?
     var useTLS: Bool = false
+    /// Log in to our account with SASL, using the nickname and `password`, instead of sending
+    /// `password` as the server's.
+    var useSASL: Bool = false
     var channels: [IRCChannel] = []
     var privateMessages: [IRCPrivateMessage] = []
     var log: [ChatMessage] = []
@@ -45,13 +48,14 @@ final class IRCServer: Identifiable {
         case reconnecting
     }
 
-    init(id: UUID = UUID(), name: String, host: String, port: Int, password: String?, useTLS: Bool = false, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {
+    init(id: UUID = UUID(), name: String, host: String, port: Int, password: String?, useTLS: Bool = false, useSASL: Bool = false, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {
         self.id = id
         self.name = name
         self.host = host
         self.port = port
         self.password = password
         self.useTLS = useTLS
+        self.useSASL = useSASL
         self.autoConnectOnLaunch = autoConnectOnLaunch
         self.nickname = nickname
     }
@@ -88,13 +92,21 @@ final class IRCServer: Identifiable {
     // MARK: - Persistence
 
     func toRecord() -> IRCServerRecord {
-        IRCServerRecord(id: id, name: name, host: host, port: port, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname)
+        let savedChannels = channels.filter(\.isSaved).map(\.name)
+        return IRCServerRecord(id: id, name: name, host: host, port: port, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname,
+                               useSASL: useSASL, channels: savedChannels.isEmpty ? nil : savedChannels)
     }
 
     convenience init(from r: IRCServerRecord) {
         // Password is NOT taken from the record (it is only the legacy migration value).
         // ChatStore.loadServers populates `password` from the Keychain after constructing.
-        self.init(id: r.id, name: r.name, host: r.host, port: r.port, password: nil, useTLS: r.useTLS ?? false, autoConnectOnLaunch: r.autoConnectOnLaunch ?? false, nickname: r.nickname)
+        self.init(id: r.id, name: r.name, host: r.host, port: r.port, password: nil, useTLS: r.useTLS ?? false, useSASL: r.useSASL ?? false, autoConnectOnLaunch: r.autoConnectOnLaunch ?? false, nickname: r.nickname)
+        // The saved channels show up at once, not yet joined; registering joins them.
+        channels = (r.channels ?? []).map { name in
+            let channel = IRCChannel(name: name)
+            channel.isSaved = true
+            return channel
+        }
     }
 }
 
@@ -109,8 +121,12 @@ struct IRCServerRecord: Codable {
     let useTLS: Bool?
     let autoConnectOnLaunch: Bool?
     let nickname: String?
+    let useSASL: Bool?
+    /// The channels to join again on connecting, by name. Their keys aren't saved.
+    let channels: [String]?
 
-    init(id: UUID, name: String, host: String, port: Int, password: String? = nil, useTLS: Bool?, autoConnectOnLaunch: Bool?, nickname: String? = nil) {
+    init(id: UUID, name: String, host: String, port: Int, password: String? = nil, useTLS: Bool?, autoConnectOnLaunch: Bool?, nickname: String? = nil,
+         useSASL: Bool? = nil, channels: [String]? = nil) {
         self.id = id
         self.name = name
         self.host = host
@@ -119,6 +135,8 @@ struct IRCServerRecord: Codable {
         self.useTLS = useTLS
         self.autoConnectOnLaunch = autoConnectOnLaunch
         self.nickname = nickname
+        self.useSASL = useSASL
+        self.channels = channels
     }
 
     // Custom encode: deliberately OMIT password so it never returns to plaintext storage.
@@ -131,6 +149,8 @@ struct IRCServerRecord: Codable {
         try c.encodeIfPresent(useTLS, forKey: .useTLS)
         try c.encodeIfPresent(autoConnectOnLaunch, forKey: .autoConnectOnLaunch)
         try c.encodeIfPresent(nickname, forKey: .nickname)
+        try c.encodeIfPresent(useSASL, forKey: .useSASL)
+        try c.encodeIfPresent(channels, forKey: .channels)
         // password intentionally not encoded
     }
 

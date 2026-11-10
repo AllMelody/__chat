@@ -1,3 +1,5 @@
+import Foundation
+
 /// Constructors for the client commands the app sends (RFC 2812 §3, IRCv3 capability
 /// negotiation), so call sites read `client.send(.join("#swift"))`.
 nonisolated extension IRCMessage {
@@ -6,6 +8,26 @@ nonisolated extension IRCMessage {
         IRCMessage("CAP", ["REQ", capabilities.joined(separator: " ")])
     }
     static func capabilityEnd() -> IRCMessage { IRCMessage("CAP", ["END"]) }
+
+    /// Starts SASL authentication by naming its mechanism (`PLAIN`), or carries a piece of
+    /// the credentials.
+    static func authenticate(_ argument: String) -> IRCMessage { IRCMessage("AUTHENTICATE", [argument]) }
+
+    /// The SASL PLAIN credentials (RFC 4616) as the AUTHENTICATE messages that carry them:
+    /// base64 in pieces of at most 400 characters, where a last piece of exactly 400 is
+    /// followed by `+` to say there's no more (IRCv3 SASL 3.1).
+    static func plainAuthentication(account: String, password: String) -> [IRCMessage] {
+        var rest = Data("\(account)\0\(account)\0\(password)".utf8).base64EncodedString()[...]
+        var messages: [IRCMessage] = []
+        while rest.count >= saslPieceLength {
+            messages.append(.authenticate(String(rest.prefix(saslPieceLength))))
+            rest = rest.dropFirst(saslPieceLength)
+        }
+        messages.append(.authenticate(rest.isEmpty ? "+" : String(rest)))
+        return messages
+    }
+
+    private static let saslPieceLength = 400
 
     static func pass(_ password: String) -> IRCMessage { IRCMessage("PASS", [password]) }
     static func nick(_ nickname: String) -> IRCMessage { IRCMessage("NICK", [nickname]) }

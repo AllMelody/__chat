@@ -28,8 +28,12 @@ final class IRCConnectionService {
         /// The server refused something we sent. `subject` is the channel, nick or command
         /// it's about, when the reply names one.
         case errorReply(subject: String?, text: String)
+        /// The server said something else in reply: the answer to a command like WHOIS, or,
+        /// with `isGreeting`, part of what it tells everyone who connects. The first of
+        /// `arguments` is often the channel or nick it's about.
+        case reply(arguments: [String], isGreeting: Bool)
         case joined(channel: String, nick: String, isSelf: Bool)
-        case parted(channel: String, nick: String, isSelf: Bool)
+        case parted(channel: String, nick: String, reason: String?, isSelf: Bool)
         /// `nick` was removed from `channel` by `kicker` (nil when the server did it).
         case kicked(channel: String, nick: String, kicker: String?, reason: String?, isSelf: Bool)
         /// Someone else changed their nickname. (Ours is `nicknameChanged`.)
@@ -39,6 +43,10 @@ final class IRCConnectionService {
         case topic(channel: String, topic: String, setBy: String?)
         /// Everyone in a channel, without their status prefixes.
         case names(channel: String, nicks: [String])
+        /// Modes changed on `target`, a channel or ourselves, by `setter` (nil when unnamed).
+        case modeChanged(target: String, modes: String, setter: String?)
+        /// `sender` invited us to `channel`.
+        case invited(channel: String, sender: String)
     }
 
     /// Receives every event, in order, with the server it concerns.
@@ -250,7 +258,7 @@ final class IRCConnectionService {
             .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
             .first(where: IRCName.isValidNickname) ?? "Guest"
         let client = IRCClient(host: server.host, port: server.port, useTLS: server.useTLS,
-                               nickname: nick, password: server.password)
+                               nickname: nick, password: server.password, usesSASL: server.useSASL)
         client.onEvent = { [weak self, weak client, serverID = server.id] event in
             guard let self, let client else { return }
             self.handle(event, from: client, serverID: serverID)
@@ -274,6 +282,7 @@ final class IRCConnectionService {
         
         clients.removeValue(forKey: server.id)?.quit()
         removeQueuedLines { $0.server.id == server.id }
+        leaveAllChannels(on: server)
         server.connectionStatus = .disconnected
         server.displayAttempt = 0
         server.shouldAutoReconnect = false
@@ -628,6 +637,9 @@ final class IRCConnectionService {
         case .errorReply(let subject, let text):
             report(.errorReply(subject: subject, text: text), for: serverID)
 
+        case .reply(let arguments, let isGreeting):
+            report(.reply(arguments: arguments, isGreeting: isGreeting), for: serverID)
+
         // Server time, when present, dates bouncer backlog to when it was originally sent.
         case .channelMessage(let channel, let message):
             let statusTarget = message.statusPrefix.map { "\($0)\(channel)" }
@@ -643,8 +655,8 @@ final class IRCConnectionService {
         case .joined(let channel, let nick, let isSelf):
             report(.joined(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
 
-        case .parted(let channel, let nick, let isSelf):
-            report(.parted(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
+        case .parted(let channel, let nick, let reason, let isSelf):
+            report(.parted(channel: channel, nick: nick, reason: reason, isSelf: isSelf), for: serverID)
 
         case .kicked(let channel, let nick, let kicker, let reason, let isSelf):
             report(.kicked(channel: channel, nick: nick, kicker: kicker, reason: reason, isSelf: isSelf), for: serverID)
@@ -660,6 +672,12 @@ final class IRCConnectionService {
 
         case .names(let channel, let nicks):
             report(.names(channel: channel, nicks: nicks), for: serverID)
+
+        case .modeChanged(let target, let modes, let setter):
+            report(.modeChanged(target: target, modes: modes, setter: setter), for: serverID)
+
+        case .invited(let channel, let sender):
+            report(.invited(channel: channel, sender: sender), for: serverID)
         }
     }
 

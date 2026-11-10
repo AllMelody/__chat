@@ -104,9 +104,19 @@ struct ContentView: View {
     // MARK: - Right Pane
     private var rightPane: some View {
         AutosavingSplitView(left: {
-            List { ForEach(currentUsers, id: \.self) { Text($0) } }
-                .listStyle(.plain)
-                .environment(\.defaultMinListRowHeight, rowHeight)
+            List {
+                ForEach(currentUsers, id: \.self) { nick in
+                    Text(nick)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        // Double-click someone to talk to them privately.
+                        .onTapGesture(count: 2) {
+                            if let server = model.selectedItem?.server { model.openPrivateConversation(with: nick, on: server) }
+                        }
+                }
+            }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, rowHeight)
         }, right: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -155,6 +165,7 @@ struct ContentView: View {
                                 node: node,
                                 unreadCount: ch.unreadCount,
                                 wantsAttention: ch.mentionCount > 0,
+                                isDimmed: !ch.joined,
                                 isSelected: model.selectedNodeID == ch.id,
                                 rowHeight: rowHeight,
                                 iconColWidth: iconColWidth,
@@ -172,6 +183,7 @@ struct ContentView: View {
                                 node: node,
                                 unreadCount: pm.unreadCount,
                                 wantsAttention: pm.unreadCount > 0,   // all of it was said to us
+                                isDimmed: false,
                                 isSelected: model.selectedNodeID == pm.id,
                                 rowHeight: rowHeight,
                                 iconColWidth: iconColWidth,
@@ -984,6 +996,8 @@ struct ConversationRow: View {
     let unreadCount: Int
     /// Some of what's unread was meant for us (a mention, a private message): the badge is red.
     let wantsAttention: Bool
+    /// A channel we're not in right now: disconnected, kicked, or not let in.
+    let isDimmed: Bool
     let isSelected: Bool
     let rowHeight: CGFloat
     let iconColWidth: CGFloat
@@ -995,6 +1009,7 @@ struct ConversationRow: View {
     var body: some View {
         SidebarRowBase(isSelected: isSelected, indent: indentWidth, rowHeight: rowHeight, activeState: activeState) {
             Image(systemName: node.systemImageName)
+                .opacity(isDimmed ? 0.5 : 1)
                 .frame(width: iconColWidth, alignment: .center)
                 .overlay(alignment: .topTrailing) {
                     if unreadCount > 0 {
@@ -1005,6 +1020,7 @@ struct ConversationRow: View {
                     }
                 }
             Text(node.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                .opacity(isDimmed ? 0.5 : 1)
         }
         .contextMenu { Button(menuTitle, action: menuAction) }
         .onTapGesture(perform: select)
@@ -1099,6 +1115,11 @@ struct PreferencesView: View {
                         .labelsHidden()
                 }
                 GridRow {
+                    Text("Show joins, parts and quits in channels:")
+                    Toggle("", isOn: $prefs.showJoinsAndParts)
+                        .labelsHidden()
+                }
+                GridRow {
                     Text("Log raw server traffic (debug):")
                     Toggle("", isOn: $prefs.debugRawServerLog)
                         .labelsHidden()
@@ -1124,6 +1145,7 @@ struct ServerFormView: View {
     @State private var port: String
     @State private var password: String
     @State private var useTLS: Bool
+    @State private var useSASL: Bool
     @State private var autoConnectOnLaunch: Bool
     @State private var nickname: String
 
@@ -1136,6 +1158,7 @@ struct ServerFormView: View {
         _port = State(initialValue: String(server?.port ?? 6697))
         _password = State(initialValue: server?.password ?? "")
         _useTLS = State(initialValue: server?.useTLS ?? true)
+        _useSASL = State(initialValue: server?.useSASL ?? false)
         _autoConnectOnLaunch = State(initialValue: server?.autoConnectOnLaunch ?? false)
         _nickname = State(initialValue: server?.nickname ?? "")
     }
@@ -1145,7 +1168,9 @@ struct ServerFormView: View {
     private var trimmedHost: String { host.trimmingCharacters(in: .whitespaces) }
     private var trimmedNick: String { nickname.trimmingCharacters(in: .whitespaces) }
     private var nickIsValid: Bool { trimmedNick.isEmpty || IRCName.isValidNickname(trimmedNick) }
-    private var canSave: Bool { !trimmedName.isEmpty && !trimmedHost.isEmpty && validPort != nil && nickIsValid }
+    /// SASL logs the nickname in to its account with the password, so it needs both.
+    private var saslIsComplete: Bool { !useSASL || (!trimmedNick.isEmpty && !password.isEmpty) }
+    private var canSave: Bool { !trimmedName.isEmpty && !trimmedHost.isEmpty && validPort != nil && nickIsValid && saslIsComplete }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(server == nil ? "Add Server" : "Edit Server").font(.headline)
@@ -1155,6 +1180,12 @@ struct ServerFormView: View {
                 GridRow { Text("Port:"); TextField("6697", text: $port).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Password:"); SecureField("Optional", text: $password).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Nickname:"); TextField("Optional (uses default if blank)", text: $nickname).textFieldStyle(.roundedBorder) }
+                GridRow {
+                    Text("Log in with SASL:")
+                    Toggle("", isOn: $useSASL)
+                        .labelsHidden()
+                        .help("Logs the nickname in to its account with the password, instead of sending the password as the server’s. Needs both.")
+                }
                 GridRow {
                     Text("Use SSL/TLS:")
                     Toggle("", isOn: $useTLS)
@@ -1179,9 +1210,9 @@ struct ServerFormView: View {
                     let pwd: String? = password.isEmpty ? nil : password
                     let nick: String? = trimmedNick.isEmpty ? nil : trimmedNick
                     if let server {
-                        model.updateServer(id: server.id, name: trimmedName, host: trimmedHost, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                        model.updateServer(id: server.id, name: trimmedName, host: trimmedHost, port: p, password: pwd, useTLS: useTLS, useSASL: useSASL, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
                     } else {
-                        model.addServer(name: trimmedName, host: trimmedHost, port: p, password: pwd, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
+                        model.addServer(name: trimmedName, host: trimmedHost, port: p, password: pwd, useTLS: useTLS, useSASL: useSASL, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nick)
                     }
                     dismiss()
                 }

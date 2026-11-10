@@ -82,6 +82,80 @@ struct IRCSessionTests {
         #expect(session.handle(line(":srv 001 alice :Welcome")).events == [.registered(nickname: "alice")])
     }
 
+    // MARK: - SASL
+
+    /// A session that is to log `alice` in with SASL.
+    private func saslSession() -> IRCSession {
+        IRCSession(nickname: "alice", password: "secret", usesSASL: true)
+    }
+
+    private static let noSASL = IRCEvent.registrationFailed(reason: "The server doesn't offer SASL PLAIN authentication")
+
+    @Test func `With SASL, the password isn't sent as the server's`() {
+        #expect(saslSession().registrationMessages().map(\.wireFormat) == ["CAP LS 302", "NICK alice", "USER alice 0 * alice"])
+    }
+
+    @Test func `Logs in with SASL PLAIN before ending negotiation`() {
+        var session = saslSession()
+        #expect(session.handle(line(":srv CAP * LS :sasl=PLAIN,EXTERNAL server-time")).replies.map(\.wireFormat) ==
+                ["CAP REQ :server-time sasl"])
+        #expect(session.handle(line(":srv CAP * ACK :server-time sasl")).replies.map(\.wireFormat) == ["AUTHENTICATE PLAIN"])
+        // base64 of "alice\0alice\0secret"
+        #expect(session.handle(line("AUTHENTICATE +")).replies.map(\.wireFormat) == ["AUTHENTICATE YWxpY2UAYWxpY2UAc2VjcmV0"])
+        #expect(session.handle(line(":srv 900 alice alice!u@h alice :You are now logged in as alice")).events ==
+                [.reply(arguments: ["You are now logged in as alice"], isGreeting: true)])
+        #expect(session.handle(line(":srv 903 alice :SASL authentication successful")).replies.map(\.wireFormat) == ["CAP END"])
+        #expect(session.handle(line(":srv 001 alice :Welcome")).events == [.registered(nickname: "alice")])
+    }
+
+    @Test func `Logs in to the account's name even under a fallback nickname`() {
+        var session = saslSession()
+        _ = session.handle(line(":srv CAP * LS :sasl"))   // no mechanisms listed: taken at its word
+        _ = session.handle(line(":srv 433 * alice :Nickname is already in use"))
+        #expect(session.nickname == "alice_")
+        _ = session.handle(line(":srv CAP * ACK :sasl"))
+        #expect(session.handle(line("AUTHENTICATE +")).replies.map(\.wireFormat) == ["AUTHENTICATE YWxpY2UAYWxpY2UAc2VjcmV0"])
+    }
+
+    @Test(arguments: ["902", "904", "905", "906"])
+    func `A refused login fails registration`(numeric: String) {
+        var session = saslSession()
+        _ = session.handle(line(":srv CAP * LS :sasl=PLAIN"))
+        _ = session.handle(line(":srv CAP * ACK :sasl"))
+        _ = session.handle(line("AUTHENTICATE +"))
+        #expect(session.handle(line(":srv \(numeric) alice :SASL authentication failed")).events ==
+                [.registrationFailed(reason: "SASL authentication failed")])
+    }
+
+    @Test(arguments: ["CAP * LS :server-time multi-prefix", "CAP * LS :sasl=EXTERNAL,SCRAM-SHA-256", "001 alice :Welcome"])
+    func `Registration fails where SASL PLAIN isn't offered`(reply: String) {
+        var session = saslSession()
+        #expect(session.handle(line(":srv \(reply)")) == .init(events: [Self.noSASL]))
+        #expect(!session.isRegistered)
+    }
+
+    @Test func `A refused capability request fails a SASL login too`() {
+        var session = saslSession()
+        _ = session.handle(line(":srv CAP * LS :sasl"))
+        #expect(session.handle(line(":srv CAP * NAK :sasl")) == .init(events: [Self.noSASL]))
+    }
+
+    @Test func `Without SASL, an offer of it is left alone`() {
+        var session = IRCSession(nickname: "alice", password: "secret")
+        #expect(session.handle(line(":srv CAP * LS :sasl=PLAIN server-time")).replies.map(\.wireFormat) == ["CAP REQ server-time"])
+        #expect(session.handle(line("AUTHENTICATE +")) == .init())
+    }
+
+    @Test func `Long credentials go out in pieces of 400 characters`() {
+        // 300 bytes of credentials make exactly 400 characters of base64: a lone + says that was all.
+        let exact = IRCMessage.plainAuthentication(account: "a", password: String(repeating: "x", count: 296))
+        #expect(exact.map { $0.parameters[0].count } == [400, 1])
+        #expect(exact.last?.wireFormat == "AUTHENTICATE +")
+
+        let longer = IRCMessage.plainAuthentication(account: "a", password: String(repeating: "x", count: 297))
+        #expect(longer.map { $0.parameters[0].count } == [400, 4])
+    }
+
     // MARK: - Capability negotiation
 
     @Test func `Requests wanted capabilities, then ends negotiation on ACK`() {
@@ -151,6 +225,76 @@ struct IRCSessionTests {
         #expect(session.closingReason == "Closing Link: 203.0.113.7 (Excess Flood)")
     }
 
+    // MARK: - Other replies
+
+    @Test func `What the server says in greeting is told apart from answers`() {
+        var session = session()
+        #expect(session.handle(line(":srv 002 alice :Your host is srv")).events ==
+                [.reply(arguments: ["Your host is srv"], isGreeting: true)])
+        #expect(session.handle(line(":srv 252 alice 34 :IRC Operators online")).events ==
+                [.reply(arguments: ["34", "IRC Operators online"], isGreeting: true)])
+        // The numbers in front only repeat what the text says.
+        #expect(session.handle(line(":srv 265 alice 30 40 :Current local users 30, max 40")).events ==
+                [.reply(arguments: ["Current local users 30, max 40"], isGreeting: true)])
+
+        _ = session.handle(line(":srv 376 alice :End of /MOTD command."))
+        #expect(session.handle(line(":srv 311 alice bob ~b host.example * :Bob Real")).events ==
+                [.reply(arguments: ["bob", "~b", "host.example", "*", "Bob Real"], isGreeting: false)])
+        #expect(session.handle(line(":srv 331 alice #swift :No topic is set.")).events ==
+                [.reply(arguments: ["#swift", "No topic is set."], isGreeting: false)])
+    }
+
+    @Test func `Without a message of the day, being in a channel ends the greeting`() {
+        var session = session()
+        _ = session.handle(line(":alice!u@h JOIN #swift"))
+        #expect(session.handle(line(":srv 324 alice #swift +nt")).events ==
+                [.reply(arguments: ["#swift", "+nt"], isGreeting: false)])
+    }
+
+    @Test func `A bouncer passing on a new greeting from its server starts one again`() {
+        var session = session()
+        _ = session.handle(line(":srv 376 alice :End of /MOTD command."))
+        #expect(session.handle(line(":srv 001 alice :Welcome back")) == .init())   // we're registered already
+        #expect(session.handle(line(":srv 251 alice :There are 4 users")).events ==
+                [.reply(arguments: ["There are 4 users"], isGreeting: true)])
+        _ = session.handle(line(":srv 422 alice :MOTD File is missing"))
+        #expect(session.handle(line(":srv 305 alice :You are no longer marked as being away")).events ==
+                [.reply(arguments: ["You are no longer marked as being away"], isGreeting: false)])
+    }
+
+    @Test func `Away and invitation replies read as sentences`() {
+        var session = session()
+        #expect(session.handle(line(":srv 301 alice bob :gone fishing")).events ==
+                [.reply(arguments: ["bob", "is away: gone fishing"], isGreeting: false)])
+        #expect(session.handle(line(":srv 341 alice bob #swift")).events ==
+                [.reply(arguments: ["bob", "has been invited to #swift"], isGreeting: false)])
+    }
+
+    @Test(arguments: [
+        "004 alice srv ircd-1.0 iow biklmnopstv",   // mode letters the server knows
+        "329 alice #swift 1700000000",              // when the channel was created
+        "333 alice #swift bob!u@h 1700000000",      // who set the topic, and when
+        "305 alice",                                // nothing after our nickname
+    ])
+    func `Replies with nothing to read are dropped`(reply: String) {
+        var session = session()
+        #expect(session.handle(line(":srv \(reply)")) == .init())
+    }
+
+    @Test func `Mode changes on channels and on us`() {
+        var session = session()
+        #expect(session.handle(line(":op!u@h MODE #swift +o-v bob carol")).events ==
+                [.modeChanged(target: "#swift", modes: "+o-v bob carol", setter: "op")])
+        #expect(session.handle(line(":alice MODE alice :+iw")).events ==
+                [.modeChanged(target: "alice", modes: "+iw", setter: "alice")])
+    }
+
+    @Test func `Invitations to us`() {
+        var session = session()
+        #expect(session.handle(line(":bob!u@h INVITE Alice #swift")).events == [.invited(channel: "#swift", sender: "bob")])
+        #expect(session.handle(line(":bob!u@h INVITE carol #swift")) == .init())   // someone else's
+    }
+
     // MARK: - Message of the day
 
     @Test func `Collects the message of the day`() {
@@ -191,8 +335,10 @@ struct IRCSessionTests {
                 [.joined(channel: "#a", nick: "Alice", isSelf: true), .joined(channel: "#b", nick: "Alice", isSelf: true)])
         #expect(session.handle(line(":bob!u@h JOIN #a * :Bob Real")).events ==   // extended-join form
                 [.joined(channel: "#a", nick: "bob", isSelf: false)])
-        #expect(session.handle(line(":bob!u@h PART #a :bye")).events == [.parted(channel: "#a", nick: "bob", isSelf: false)])
-        #expect(session.handle(line(":alice!u@h PART #b")).events == [.parted(channel: "#b", nick: "alice", isSelf: true)])
+        #expect(session.handle(line(":bob!u@h PART #a :bye")).events ==
+                [.parted(channel: "#a", nick: "bob", reason: "bye", isSelf: false)])
+        #expect(session.handle(line(":alice!u@h PART #b")).events ==
+                [.parted(channel: "#b", nick: "alice", reason: nil, isSelf: true)])
     }
 
     @Test func `Quit with and without a reason`() {

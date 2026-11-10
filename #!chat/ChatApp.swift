@@ -30,8 +30,37 @@ struct ChatApp: App {
                     Button("Add Server…") { model.isPresentingAddServer = true }
                         .keyboardShortcut("n", modifiers: [.command, .shift])
 
-                    // No ⌘⌫ shortcut: menu shortcuts win over the composer, where ⌘⌫ has to
-                    // keep deleting to the start of the line.
+                    Divider()
+
+                    // These act on the server of whatever is selected: the server itself, or
+                    // the one a selected conversation is on.
+                    let server = model.selectedItem?.server
+                    switch server?.connectionStatus {
+                    case .connected:
+                        Button("Disconnect") { if let server { model.disconnect(server) } }
+                    case .connecting, .reconnecting:
+                        Button("Cancel Connection") { if let server { model.disconnect(server) } }
+                    case .disconnected, .connectionTimeout, nil:
+                        Button("Connect") { if let server { model.connect(server) } }
+                            .disabled(server == nil)
+                    }
+                    Button("Join Channel…") {
+                        model.pendingJoinServerID = server?.id
+                        model.isPresentingJoinChannel = true
+                    }
+                    .keyboardShortcut("j")
+                    .disabled(server?.isConnected != true)
+                    Button("Edit Server…") {
+                        model.pendingEditServerID = server?.id
+                        model.isPresentingEditServer = true
+                    }
+                    .disabled(server == nil)
+
+                    Divider()
+
+                    // Only with the server itself selected, and no ⌘⌫ shortcut: menu shortcuts
+                    // win over the composer, where ⌘⌫ has to keep deleting to the start of the
+                    // line.
                     Button("Delete Server…") {
                         if let server = model.server(withID: model.selectedNodeID) {
                             model.requestDeletion(of: server)

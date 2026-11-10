@@ -172,21 +172,30 @@ final class ChatStore {
         connectionService.connect(server)
     }
     
-    /// Disconnects at the user's request. The server's channels go too; its private
-    /// conversations stay.
+    /// Disconnects at the user's request. The server's channels and private conversations
+    /// stay, with what was said in them; connecting again rejoins the channels.
     func disconnect(_ server: IRCServer) {
         connectionService.disconnect(server)
-        for channel in server.channels { remove(channel, from: server) }
     }
 
     // MARK: - Channels
 
-    /// Joins channels at the user's request. `keys` go with `names` in order, as far as they
-    /// reach.
+    /// Joins channels at the user's request and shows the first, which is where the join's
+    /// outcome appears. `keys` go with `names` in order, as far as they reach.
     func joinChannels(_ names: [String], keys: [String] = [], on server: IRCServer) {
         for (index, name) in names.enumerated() {
             connectionService.joinChannel(name, key: index < keys.count ? keys[index] : nil, on: server)
         }
+        if let first = names.first, let channel = server.channel(named: first) {
+            select(SidebarItem(server: server, kind: .channel(channel)))
+        }
+    }
+
+    /// Shows the private conversation with `nick`, starting one if there isn't any.
+    func openPrivateConversation(with nick: String, on server: IRCServer) {
+        if let ownNick = server.currentNick, IRCName.equal(nick, ownNick) { return }
+        let pm = server.getOrCreatePrivateMessage(with: nick)
+        select(SidebarItem(server: server, kind: .privateMessage(pm)))
     }
 
     /// Leaves a channel and closes it. One we're no longer in (kicked, or disconnected) just
@@ -237,6 +246,7 @@ final class ChatStore {
         connectionService.cancelQueuedLines(to: channel.id)
         discardThumbnails(for: channel.log)
         server.channels.removeAll { $0.id == channel.id }
+        persistServers()   // it's no longer one to join again
         selectServerIfSelectionIsGone(server)
     }
 
@@ -247,14 +257,14 @@ final class ChatStore {
     
     // MARK: - Server CRUD
     
-    func addServer(name: String, host: String, port: Int, password: String?, useTLS: Bool, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {
-        let server = IRCServer(name: name, host: host, port: port, password: password, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname)
+    func addServer(name: String, host: String, port: Int, password: String?, useTLS: Bool, useSASL: Bool = false, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {
+        let server = IRCServer(name: name, host: host, port: port, password: password, useTLS: useTLS, useSASL: useSASL, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname)
         try! syncKeychain(password: password, for: server.id)
         servers.append(server)
         selectedNodeID = server.id
     }
     
-    func updateServer(id: UUID, name: String, host: String, port: Int, password: String?, useTLS: Bool, autoConnectOnLaunch: Bool, nickname: String? = nil) {
+    func updateServer(id: UUID, name: String, host: String, port: Int, password: String?, useTLS: Bool, useSASL: Bool = false, autoConnectOnLaunch: Bool, nickname: String? = nil) {
         guard let idx = servers.firstIndex(where: { $0.id == id }) else { return }
         let s = servers[idx]
         s.name = name
@@ -262,6 +272,7 @@ final class ChatStore {
         s.port = port
         s.password = password
         s.useTLS = useTLS
+        s.useSASL = useSASL
         s.autoConnectOnLaunch = autoConnectOnLaunch
         s.nickname = nickname
         try! syncKeychain(password: password, for: id)
@@ -508,10 +519,12 @@ final class ChatStore {
             serverDidChangeNick(server, to: nick)
         case .errorReply(let subject, let text):
             showErrorReply(text, about: subject, on: server)
+        case .reply(let arguments, let isGreeting):
+            showReply(arguments, isGreeting: isGreeting, on: server)
         case .joined(let channel, let nick, let isSelf):
             userJoined(nick, channel: channel, isSelf: isSelf, on: server)
-        case .parted(let channel, let nick, let isSelf):
-            userLeft(nick, channel: channel, isSelf: isSelf, on: server)
+        case .parted(let channel, let nick, let reason, let isSelf):
+            userLeft(nick, channel: channel, reason: reason, isSelf: isSelf, on: server)
         case .kicked(let channel, let nick, let kicker, let reason, let isSelf):
             userKicked(nick, from: channel, by: kicker, reason: reason, isSelf: isSelf, on: server)
         case .nickChanged(let oldNick, let newNick):
@@ -522,6 +535,10 @@ final class ChatStore {
             topicChanged(to: topic, in: channel, by: setBy, on: server)
         case .names(let channelName, let nicks):
             server.channel(named: channelName)?.setUsers(nicks)
+        case .modeChanged(let target, let modes, let setter):
+            modeChanged(modes, on: target, by: setter, server: server)
+        case .invited(let channel, let sender):
+            log("\(sender) invited you to \(channel)", in: whereToShow(somethingAbout: nil, on: server))
         }
     }
 
@@ -580,16 +597,26 @@ final class ChatStore {
         }
     }
 
-    /// Shows an error reply where the user will see it: in the conversation it's about, or else
-    /// in the one they're looking at on that server, or else in the server log.
+    /// Where to show something the server said so that the user sees it: in the conversation
+    /// it's about, or else in the one they're looking at on that server, or else in the
+    /// server log.
+    private func whereToShow(somethingAbout subject: String?, on server: IRCServer) -> SidebarItem {
+        if let subject, let conversation = conversation(named: subject, on: server) { return conversation }
+        if let selected = selectedItem, selected.server.id == server.id { return selected }
+        return SidebarItem(server: server, kind: .server)
+    }
+
     private func showErrorReply(_ text: String, about subject: String?, on server: IRCServer) {
-        var destination = SidebarItem(server: server, kind: .server)
-        if let subject, let conversation = conversation(named: subject, on: server) {
-            destination = conversation
-        } else if let selected = selectedItem, selected.server.id == server.id {
-            destination = selected
-        }
-        log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: destination)
+        log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: whereToShow(somethingAbout: subject, on: server))
+    }
+
+    /// Shows a reply that answers a command, such as a line of WHOIS, where the user will see
+    /// it. The server's greeting, which nobody asked for, goes to the server log.
+    private func showReply(_ arguments: [String], isGreeting: Bool, on server: IRCServer) {
+        let destination = isGreeting
+            ? SidebarItem(server: server, kind: .server)
+            : whereToShow(somethingAbout: arguments.first, on: server)
+        log(arguments.joined(separator: " "), in: destination)
     }
 
     /// Files a NOTICE where it belongs: with its channel, or in the private conversation
@@ -610,6 +637,16 @@ final class ChatStore {
             server.log.append(ChatMessage(time: time, text: "NOTICE\(origin)\(target): \(text)"))
         }
         noteLogsChanged()
+    }
+
+    /// Logs a mode change in its channel. One on anything else is on us, for the server log.
+    private func modeChanged(_ modes: String, on target: String, by setter: String?, server: IRCServer) {
+        let who = setter ?? "The server"
+        if let channel = server.channel(named: target) {
+            log("\(who) set mode \(modes)", in: SidebarItem(server: server, kind: .channel(channel)))
+        } else {
+            log("\(who) set mode \(modes) on \(target)", in: SidebarItem(server: server, kind: .server))
+        }
     }
 
     private func serverDidChangeNick(_ server: IRCServer, to nick: String) {
@@ -663,29 +700,39 @@ final class ChatStore {
         noteLogsChanged()
     }
 
+    /// Whether channels log other people's comings and goings (a preference; off by default).
+    private var showsJoinsAndParts: Bool { preferences?.showJoinsAndParts ?? false }
+
     private func userJoined(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {
         guard isSelf else {
-            server.channel(named: channel)?.addUserIfNotPresent(nick)
+            guard let channelObj = server.channel(named: channel) else { return }
+            channelObj.addUserIfNotPresent(nick)
+            if showsJoinsAndParts { log("\(nick) joined", in: SidebarItem(server: server, kind: .channel(channelObj))) }
             return
         }
         // The member list follows in the NAMES reply the server sends with every join.
         let channelObj = server.getOrCreateChannel(named: channel)
         channelObj.joined = true
         channelObj.wasKicked = false
+        channelObj.isSaved = true
+        persistServers()
         let message = ChatMessage(time: Date(), text: "Joined \(channel)")
         channelObj.log.append(message)
         server.log.append(message)
         noteLogsChanged()
     }
 
-    private func userLeft(_ nick: String, channel: String, isSelf: Bool, on server: IRCServer) {
+    private func userLeft(_ nick: String, channel: String, reason: String?, isSelf: Bool, on server: IRCServer) {
         if isSelf {
             // Usually closed already, when the part was ours to begin with.
             if let channelObj = server.channel(named: channel) { remove(channelObj, from: server) }
             server.log.append(ChatMessage(time: Date(), text: "Parted \(channel)"))
             noteLogsChanged()
-        } else {
-            server.channel(named: channel)?.removeUser(nick)
+        } else if let channelObj = server.channel(named: channel) {
+            channelObj.removeUser(nick)
+            if showsJoinsAndParts {
+                log("\(nick) left" + (reason.map { " (\($0))" } ?? ""), in: SidebarItem(server: server, kind: .channel(channelObj)))
+            }
         }
     }
 
@@ -697,6 +744,8 @@ final class ChatStore {
             // Keep the channel and its log so the user can read back and /join again.
             channelObj.joined = false
             channelObj.wasKicked = true
+            channelObj.isSaved = false
+            persistServers()
             channelObj.removeAllUsers()
             let message = ChatMessage(time: Date(), text: "You were kicked from \(channel)\(details)")
             channelObj.log.append(message)
@@ -738,20 +787,28 @@ final class ChatStore {
     }
 
     /// Someone left the network: out of every member list they go. It's said where they were
-    /// talking to us; not in the server log, which a busy network's quits would fill.
+    /// talking to us, and, when comings and goings are logged, in the channels we shared;
+    /// not in the server log, which a busy network's quits would fill.
     private func userQuit(_ nick: String, reason: String?, on server: IRCServer) {
         let quitText = reason.map { " (\($0))" } ?? ""
         let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")
 
-        for channel in server.channels {
+        var logs = 0
+        for channel in server.channels where channel.hasUser(nick) {
             channel.removeUser(nick)
+            if showsJoinsAndParts {
+                channel.log.append(logMessage)
+                logs += 1
+            }
         }
 
         // Log quit in PM conversation so the user knows their DM partner left
         if let pm = server.privateMessage(with: nick) {
             pm.log.append(logMessage)
-            noteLogsChanged()
+            logs += 1
         }
+
+        if logs > 0 { noteLogsChanged() }
     }
 }
 
@@ -804,6 +861,14 @@ extension ChatStore {
             guard client != nil else { feedback("Not connected."); return false }
             connectionService.sendMessageToTarget(message, targetName: target, from: server)
 
+        case .query(let nick, let message):
+            guard !IRCName.isChannel(nick) else { feedback("Usage: /query <nickname> [message]"); break }
+            if let message {
+                guard client != nil else { feedback("Not connected."); return false }
+                connectionService.sendMessageToTarget(message, targetName: nick, from: server)
+            }
+            openPrivateConversation(with: nick, on: server)
+
         case .quit:
             disconnect(server)
 
@@ -818,17 +883,21 @@ extension ChatStore {
             // With no new topic, this asks the server for the current one.
             client.send(.topic(channel.name, newTopic))
 
+        case .raw(let line):
+            guard let client else { feedback("Not connected."); break }
+            // The server answers, or objects, in a reply.
+            if let message = IRCMessage(line) { client.send(message) }
+
         case .usage(let command):
             switch command {
-            case "join": feedback("Usage: /join <channel> [key]")
-            case "nick": feedback("Usage: /nick <nickname>")
-            case "msg":  feedback("Usage: /msg <target> <message>")
-            case "me":   feedback("Usage: /me <action>")
-            default:     feedback("Usage: /\(command)")
+            case "join":  feedback("Usage: /join <channel> [key]")
+            case "nick":  feedback("Usage: /nick <nickname>")
+            case "msg":   feedback("Usage: /msg <target> <message>")
+            case "query": feedback("Usage: /query <nickname> [message]")
+            case "me":    feedback("Usage: /me <action>")
+            case "raw":   feedback("Usage: /raw <line for the server>")
+            default:      feedback("Usage: /\(command)")
             }
-
-        case .unknown(let command):
-            if !command.isEmpty { feedback("Unknown command: /\(command)") }
         }
         return true
     }

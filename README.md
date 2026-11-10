@@ -6,14 +6,14 @@ A native macOS IRC client built with SwiftUI and Network.framework.
 
 - Compact UI
 - Multiple servers, each with its own nickname
-- Channels and private messages
+- Channels and private messages; the channels you're in are joined again on the next launch
 - Auto-reconnect with backoff
-- Passwords stored in the macOS Keychain
+- Passwords stored in the macOS Keychain; SASL PLAIN login
 - Inline image thumbnails
 - Flood-protected send queue
 - Multi-line composer with channel topics, nick completion (Tab) and history (↑/↓)
 - Find in the log (⌘F)
-- Some slash commands (`/join`, `/part`, `/nick`, `/msg`, …); start a message with `//` to send a leading `/`
+- Some slash commands (`/join`, `/part`, `/nick`, `/msg`, `/query`, …); anything else, like `/whois` or `/mode`, goes to the server as typed, and its answer shows in the log. Start a message with `//` to send a leading `/`
 
 ## Building
 

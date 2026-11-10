@@ -19,6 +19,9 @@ final class IRCChannel: Identifiable {
     var wasKicked: Bool = false
     /// The key (channel password) we joined with, to rejoin with after a reconnect.
     var key: String?
+    /// Saved with its server, to join again the next time the app launches: a channel we've
+    /// been in and haven't parted or been kicked from.
+    var isSaved: Bool = false
 
     init(name: String) { self.name = name }
 

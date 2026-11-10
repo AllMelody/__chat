@@ -23,11 +23,13 @@ final class IRCClient {
     private var lineBuffer = IRCLineBuffer()
     private var isClosed = false
 
-    init(host: String, port: Int, useTLS: Bool, nickname: String, password: String?) {
+    /// With `usesSASL`, `password` logs `nickname` in to its account, and registration fails
+    /// where that can't be done; without, it's sent as the server's password.
+    init(host: String, port: Int, useTLS: Bool, nickname: String, password: String?, usesSASL: Bool = false) {
         self.host = host
         self.port = port
         self.useTLS = useTLS
-        session = IRCSession(nickname: nickname, password: password)
+        session = IRCSession(nickname: nickname, password: password, usesSASL: usesSASL)
     }
 
     /// Connects and registers. Events follow asynchronously, never from inside this call.

@@ -11,12 +11,13 @@ enum MessageRouter {
         case part(target: String?)              // nil = part the currently-selected channel
         case nick(String)
         case msg(target: String, message: String)
+        case query(nick: String, message: String?)   // open a private conversation, with a first message or without
         case me(String)                         // an action: "/me waves" shows as "* nick waves"
         case quit
         case names
         case topic(String?)                     // nil = request the current topic
+        case raw(String)                        // a line for the server: what follows "/raw", or a command the app doesn't know
         case usage(String)                      // usage error; payload is the command name
-        case unknown(String)                    // unrecognized command (empty = bare "/")
     }
 
     /// Pure parser: maps a raw composer line to a `ParsedCommand` with no side effects.
@@ -28,7 +29,8 @@ enum MessageRouter {
 
         let noSlash = String(input.dropFirst())
         var parts = noSlash.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true).map(String.init)
-        guard let cmd = parts.first?.lowercased() else { return .unknown("") }
+        // A bare "/" says nothing.
+        guard let cmd = parts.first?.lowercased() else { return .text("") }
         parts = Array(parts.dropFirst())
 
         switch cmd {
@@ -44,6 +46,9 @@ enum MessageRouter {
         case "msg":
             guard parts.count >= 2 else { return .usage("msg") }
             return .msg(target: parts[0], message: parts[1])
+        case "query":
+            guard let nick = parts.first else { return .usage("query") }
+            return .query(nick: nick, message: parts.count >= 2 ? parts[1] : nil)
         case "me":
             guard !parts.isEmpty else { return .usage("me") }
             return .me(parts.joined(separator: " "))
@@ -53,8 +58,12 @@ enum MessageRouter {
             return .names
         case "topic":
             return .topic(parts.isEmpty ? nil : parts.joined(separator: " "))
+        case "raw", "quote":
+            guard !parts.isEmpty else { return .usage("raw") }
+            return .raw(parts.joined(separator: " "))
         default:
-            return .unknown(cmd)
+            // Anything else is the server's to understand: /whois nick, /mode #chan +o nick, …
+            return .raw(serverLine(cmd, parts.joined(separator: " ")))
         }
     }
 
@@ -66,5 +75,19 @@ enum MessageRouter {
 
     private static func channelName(_ name: String) -> String {
         IRCName.isChannel(name) ? name : "#" + name
+    }
+
+    /// Server commands that end in free text, with the number of one-word parameters before
+    /// it, so that `/away back in an hour` sends all of the message and not just `back`.
+    private static let freeTextCommands = ["away": 0, "kick": 2, "notice": 1]
+
+    /// The protocol line for a command the app passes on, parameters as typed.
+    private static func serverLine(_ command: String, _ arguments: String) -> String {
+        guard let leading = freeTextCommands[command] else {
+            return arguments.isEmpty ? command : "\(command) \(arguments)"
+        }
+        var words = arguments.split(separator: " ", maxSplits: leading, omittingEmptySubsequences: true).map(String.init)
+        if words.count > leading, !words[leading].hasPrefix(":") { words[leading] = ":" + words[leading] }
+        return ([command] + words).joined(separator: " ")
     }
 }

@@ -27,6 +27,11 @@ nonisolated enum IRCEvent: Equatable, Sendable {
     /// The server refused something we sent (an error reply, like "Cannot send to channel").
     /// `subject` is the channel, nick or command it's about, when the reply names one.
     case errorReply(subject: String?, text: String)
+    /// Something else the server said in a numeric reply: the answer to a command like WHOIS,
+    /// or, with `isGreeting`, part of what it tells everyone who connects (its welcome and
+    /// statistics, up to the message of the day). `arguments` are the reply's parameters
+    /// without our nickname in front; the first is often the channel or nick it's about.
+    case reply(arguments: [String], isGreeting: Bool)
 
     // MARK: Messages
 
@@ -60,7 +65,7 @@ nonisolated enum IRCEvent: Equatable, Sendable {
     // MARK: Channels and users
 
     case joined(channel: String, nick: String, isSelf: Bool)
-    case parted(channel: String, nick: String, isSelf: Bool)
+    case parted(channel: String, nick: String, reason: String?, isSelf: Bool)
     /// `nick` was removed from `channel` by `kicker` (nil when the server did it).
     case kicked(channel: String, nick: String, kicker: String?, reason: String?, isSelf: Bool)
     case quit(nick: String, reason: String?)
@@ -71,4 +76,9 @@ nonisolated enum IRCEvent: Equatable, Sendable {
     /// Everyone in a channel, from a complete NAMES reply (sent when we join, or for /names),
     /// with status prefixes like `@` removed.
     case names(channel: String, nicks: [String])
+    /// Modes changed on `target`, a channel or ourselves. `modes` is the change with its
+    /// arguments, like `+o alice`; `setter` is nil when the server doesn't say who made it.
+    case modeChanged(target: String, modes: String, setter: String?)
+    /// `sender` invited us to `channel`.
+    case invited(channel: String, sender: String)
 }

@@ -15,6 +15,9 @@ final class AppPreferences {
         }
     }
     var showImageThumbnails: Bool { didSet { persist() } }
+    /// Whether channels log other people joining, leaving and quitting. Off by default: on a
+    /// quiet channel with flaky connections, those lines can be most of what's said.
+    var showJoinsAndParts: Bool { didSet { persist() } }
     var debugRawServerLog: Bool { didSet { persist() } }
 
     init() {
@@ -22,6 +25,7 @@ final class AppPreferences {
         let storedLines = d.object(forKey: Keys.maxLogLines) as? Int
         self.maxLogLines = max(1, storedLines ?? Self.defaultMaxLogLines)
         self.showImageThumbnails = d.object(forKey: Keys.showImageThumbnails) as? Bool ?? false
+        self.showJoinsAndParts = d.object(forKey: Keys.showJoinsAndParts) as? Bool ?? false
         self.debugRawServerLog = d.object(forKey: Keys.debugRawServerLog) as? Bool ?? false
     }
 
@@ -29,12 +33,14 @@ final class AppPreferences {
         let d = UserDefaults.standard
         d.set(maxLogLines, forKey: Keys.maxLogLines)
         d.set(showImageThumbnails, forKey: Keys.showImageThumbnails)
+        d.set(showJoinsAndParts, forKey: Keys.showJoinsAndParts)
         d.set(debugRawServerLog, forKey: Keys.debugRawServerLog)
     }
 
     private enum Keys {
         static let maxLogLines = "Preferences.maxLogLines"
         static let showImageThumbnails = "Preferences.showImageThumbnails"
+        static let showJoinsAndParts = "Preferences.showJoinsAndParts"
         static let debugRawServerLog = "Preferences.debugRawServerLog"
     }
 }
