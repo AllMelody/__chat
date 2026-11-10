@@ -38,10 +38,12 @@ final class ChatStore {
     // Preferences
     weak var preferences: AppPreferences? { didSet { mirrorPreferencesToServices() } }
     @ObservationIgnored private var preferencesMirrorTask: Task<Void, Never>?
+    @ObservationIgnored private var applicationObservers: [any NSObjectProtocol] = []
     
     init() {
         setupServices()
         loadServers()
+        observeApplication()
         // Unit tests run inside the app, which mustn't go connecting to servers meanwhile.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Delay auto-connect to ensure UI is ready
@@ -71,7 +73,22 @@ final class ChatStore {
         }
     }
 
+    /// Tells the servers goodbye when the app quits.
+    private func observeApplication() {
+        applicationObservers = [
+            NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.connectionService.quitAllBeforeTermination() }
+            },
+        ]
+    }
+
     // MARK: - Notifications
+
+    /// Whether the user is plainly looking at a conversation: the app is in front, and it's
+    /// the one selected.
+    private func isOnScreen(_ nodeID: UUID) -> Bool {
+        NSApp.isActive && selectedNodeID == nodeID
+    }
 
     /// Posts a macOS notification about a message, unless the user is plainly already
     /// looking at the conversation (app active + conversation selected) or the message is
@@ -79,7 +96,7 @@ final class ChatStore {
     /// live traffic.
     private func notify(_ title: String, about message: ChatMessage, on server: IRCServer, nodeID: UUID) {
         guard Date().timeIntervalSince(message.time) < 60 else { return }
-        if NSApp.isActive && selectedNodeID == nodeID { return }
+        if isOnScreen(nodeID) { return }
         let sender = message.senderNick ?? "Someone"
         notificationService.post(
             title: title,
@@ -113,7 +130,7 @@ final class ChatStore {
     // MARK: - Connection Management
     
     /// Connects at the user's request (or for auto-connect on launch), which also makes the
-    /// server eligible for automatic reconnects, starting from a fresh set of attempts.
+    /// server eligible for automatic reconnects, with their pauses starting over.
     func connect(_ server: IRCServer) {
         server.shouldAutoReconnect = true
         connectionService.resetReconnectionAttempts(for: server)
@@ -129,8 +146,12 @@ final class ChatStore {
 
     // MARK: - Channels
 
-    func joinChannel(_ name: String, key: String? = nil, on server: IRCServer) {
-        connectionService.joinChannel(name, key: key, on: server)
+    /// Joins channels at the user's request. `keys` go with `names` in order, as far as they
+    /// reach.
+    func joinChannels(_ names: [String], keys: [String] = [], on server: IRCServer) {
+        for (index, name) in names.enumerated() {
+            connectionService.joinChannel(name, key: index < keys.count ? keys[index] : nil, on: server)
+        }
     }
 
     /// Leaves a channel and closes it. One we're no longer in (kicked, or disconnected) just
@@ -414,6 +435,8 @@ final class ChatStore {
             }
         case .messageReceived(let message, let target):
             receive(message, for: target, on: server)
+        case .notice(let sender, let channel, let text, let time):
+            showNotice(text, from: sender, to: channel, time: time, on: server)
         case .registered(let nick):
             serverDidRegister(server, as: nick)
         case .registrationFailed(let reason):
@@ -437,12 +460,12 @@ final class ChatStore {
         case .topic(let channel, let topic, let setBy):
             topicChanged(to: topic, in: channel, by: setBy, on: server)
         case .names(let channelName, let nicks):
-            server.channel(named: channelName)?.users = nicks
+            server.channel(named: channelName)?.setUsers(nicks)
         }
     }
 
     /// After a wake from sleep or a network outage, reconnects the servers that should be
-    /// connected. (Not .reconnectionFailed: running out of retries clears shouldAutoReconnect.)
+    /// connected.
     private func reconnectAfterNetworkChange() {
         let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout]
         for server in servers where server.shouldAutoReconnect && disconnectedStates.contains(server.connectionStatus) {
@@ -474,8 +497,8 @@ final class ChatStore {
         noteLogsChanged()
 
         // Reconnection attempts reset only once the connection proves stable (its first PONG,
-        // see IRCConnectionService), so a server that drops us right after the welcome can't
-        // keep us redialing forever.
+        // see IRCConnectionService), so a server that drops us right after the welcome is
+        // redialed after longer and longer pauses, not at once every time.
         server.shouldAutoReconnect = true
 
         for channel in server.channels where !channel.wasKicked {
@@ -506,6 +529,26 @@ final class ChatStore {
             destination = selected
         }
         log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: destination)
+    }
+
+    /// Files a NOTICE where it belongs: with its channel, or in the private conversation
+    /// that's open with its sender, or else, like most of what services and the server
+    /// itself have to say, in the server log.
+    private func showNotice(_ text: String, from sender: String?, to channel: String?, time: Date?, on server: IRCServer) {
+        let origin = sender.map { " from \($0)" } ?? ""
+        let time = time ?? Date()
+        if let channel, let channelObj = server.channel(named: channel) {
+            channelObj.log.append(ChatMessage(time: time, text: "NOTICE\(origin): \(text)"))
+            if !isOnScreen(channelObj.id) { channelObj.unreadCount += 1 }
+        } else if let sender, let pm = server.privateMessage(with: sender) {
+            pm.log.append(ChatMessage(time: time, text: "NOTICE\(origin): \(text)"))
+            if !isOnScreen(pm.id) { pm.unreadCount += 1 }
+        } else {
+            // "NOTICE from NickServ: …", "NOTICE from bot to #chan: …", or just "NOTICE: …"
+            let target = channel.map { " to \($0)" } ?? ""
+            server.log.append(ChatMessage(time: time, text: "NOTICE\(origin)\(target): \(text)"))
+        }
+        noteLogsChanged()
     }
 
     private func serverDidChangeNick(_ server: IRCServer, to nick: String) {
@@ -591,7 +634,7 @@ final class ChatStore {
             // Keep the channel and its log so the user can read back and /join again.
             channelObj.joined = false
             channelObj.wasKicked = true
-            channelObj.users.removeAll()
+            channelObj.removeAllUsers()
             let message = ChatMessage(time: Date(), text: "You were kicked from \(channel)\(details)")
             channelObj.log.append(message)
             server.log.append(message)
@@ -628,10 +671,11 @@ final class ChatStore {
             pm.log.append(nickMessage)
         }
 
-        server.log.append(nickMessage)
         noteLogsChanged()
     }
 
+    /// Someone left the network: out of every member list they go. It's said where they were
+    /// talking to us; not in the server log, which a busy network's quits would fill.
     private func userQuit(_ nick: String, reason: String?, on server: IRCServer) {
         let quitText = reason.map { " (\($0))" } ?? ""
         let logMessage = ChatMessage(time: Date(), text: "\(nick) has quit\(quitText)")
@@ -641,10 +685,10 @@ final class ChatStore {
         }
 
         // Log quit in PM conversation so the user knows their DM partner left
-        server.privateMessage(with: nick)?.log.append(logMessage)
-
-        server.log.append(logMessage)
-        noteLogsChanged()
+        if let pm = server.privateMessage(with: nick) {
+            pm.log.append(logMessage)
+            noteLogsChanged()
+        }
     }
 }
 
@@ -672,9 +716,9 @@ extension ChatStore {
         case .me(let action):
             return send(action, asAction: true, to: selection)
 
-        case .join(let name, let key):
+        case .join(let channels, let keys):
             guard client != nil else { feedback("Not connected."); break }
-            joinChannel(name, key: key, on: server)
+            joinChannels(channels, keys: keys, on: server)
 
         case .part(let name):
             if let name {

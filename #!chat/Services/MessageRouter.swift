@@ -7,7 +7,7 @@ enum MessageRouter {
     /// unit-tested independently of connections and view state.
     enum ParsedCommand: Equatable {
         case text(String)                       // plain message (may be empty); "//" sends a leading "/"
-        case join(channel: String, key: String?)
+        case join(channels: [String], keys: [String])   // keys go with the channels in order, as far as they reach
         case part(target: String?)              // nil = part the currently-selected channel
         case nick(String)
         case msg(target: String, message: String)
@@ -33,8 +33,9 @@ enum MessageRouter {
 
         switch cmd {
         case "join":
-            guard let name = parts.first else { return .usage("join") }
-            return .join(channel: channelName(name), key: parts.count >= 2 ? parts[1] : nil)
+            guard let names = parts.first else { return .usage("join") }
+            let keys = parts.count >= 2 ? parts[1].split(separator: ",").map(String.init) : []
+            return .join(channels: channelNames(names), keys: keys)
         case "part":
             return .part(target: parts.first.map { channelName($0) })
         case "nick":
@@ -57,7 +58,12 @@ enum MessageRouter {
         }
     }
 
-    /// A channel name as typed: one without a channel prefix gets the usual `#`.
+    /// The channels in a list as typed, like `#swift,help`: each name without a channel prefix
+    /// gets the usual `#`.
+    static func channelNames(_ list: String) -> [String] {
+        list.split(separator: ",").map { channelName(String($0)) }
+    }
+
     private static func channelName(_ name: String) -> String {
         IRCName.isChannel(name) ? name : "#" + name
     }

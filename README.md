@@ -18,6 +18,8 @@ A native macOS IRC client built with SwiftUI and Network.framework.
 
 Open `#!chat.xcodeproj` in Xcode 26+ and Run. There are no third-party dependencies.
 
+Debug builds keep the sandbox's incoming-connections entitlement, which only the unit tests use: they run a loopback IRC server inside the app. Release builds don't have it.
+
 ## Notes
 
 - Heavily inspired by [LimeChat](https://github.com/psychs/limechat) by Satoshi Nakagawa.

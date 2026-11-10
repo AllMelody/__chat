@@ -34,7 +34,7 @@ final class IRCServer: Identifiable {
     var displayAttempt: Int = 0
     /// Whether the app should bring this connection back by itself after a drop, a wake from
     /// sleep, or a network outage. Set when the user (or auto-connect on launch) connects;
-    /// cleared by an explicit disconnect, a rejected registration, or running out of retries.
+    /// cleared by an explicit disconnect or a rejected registration.
     var shouldAutoReconnect: Bool = false
     
     enum ConnectionStatus {
@@ -43,7 +43,6 @@ final class IRCServer: Identifiable {
         case connected
         case connectionTimeout
         case reconnecting
-        case reconnectionFailed
     }
 
     init(id: UUID = UUID(), name: String, host: String, port: Int, password: String?, useTLS: Bool = false, autoConnectOnLaunch: Bool = false, nickname: String? = nil) {

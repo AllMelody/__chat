@@ -4,9 +4,10 @@ import Testing
 struct SlashCommandTests {
     @Test(arguments: [
         ("hello", .text("hello")),                                                  // plain text
-        ("/join swift", .join(channel: "#swift", key: nil)),                        // adds '#'
-        ("/join #swift hunter2", .join(channel: "#swift", key: "hunter2")),         // keeps '#' and key
-        ("/join &local", .join(channel: "&local", key: nil)),                       // other channel prefixes too
+        ("/join swift", .join(channels: ["#swift"], keys: [])),                     // adds '#'
+        ("/join #swift hunter2", .join(channels: ["#swift"], keys: ["hunter2"])),   // keeps '#' and key
+        ("/join &local", .join(channels: ["&local"], keys: [])),                    // other channel prefixes too
+        ("/join #a,b,&c k1,k2", .join(channels: ["#a", "#b", "&c"], keys: ["k1", "k2"])),   // lists, as in the protocol
         ("/me waves at everyone", .me("waves at everyone")),
         ("/me", .usage("me")),                                                      // action required
         ("/join", .usage("join")),                                                  // missing args
@@ -26,5 +27,10 @@ struct SlashCommandTests {
     ] as [(String, MessageRouter.ParsedCommand)])
     func `Parses composer input`(input: String, expected: MessageRouter.ParsedCommand) {
         #expect(MessageRouter.parse(input) == expected)
+    }
+
+    @Test func `Channel lists get their prefixes one by one`() {
+        #expect(MessageRouter.channelNames("swift,#help,&local") == ["#swift", "#help", "&local"])
+        #expect(MessageRouter.channelNames(",") == [])
     }
 }

@@ -196,8 +196,9 @@ struct ContentView: View {
     private var currentMessages: [ChatMessage] {
         model.selectedItem?.log ?? []
     }
+    /// The channel's members, which it keeps in order.
     private var currentUsers: [String] {
-        (model.selectedItem?.channel?.users ?? []).sorted(using: .localizedStandard)
+        model.selectedItem?.channel?.users ?? []
     }
 }
 
@@ -848,7 +849,7 @@ struct ServerRow: View {
         switch server.connectionStatus {
         case .connected: .green
         case .connecting, .reconnecting: .orange
-        case .connectionTimeout, .reconnectionFailed: .red
+        case .connectionTimeout: .red
         case .disconnected: .secondary
         }
     }
@@ -949,7 +950,7 @@ struct SidebarItem: Identifiable {
             case .connected: "network"
             case .connecting: "network.badge.shield.half.filled"
             case .reconnecting: "arrow.clockwise.circle"
-            case .connectionTimeout, .reconnectionFailed, .disconnected: "network.slash"
+            case .connectionTimeout, .disconnected: "network.slash"
             }
         }
     }
@@ -1036,13 +1037,14 @@ struct ServerFormView: View {
     @State private var nickname: String
 
     // Filled in here rather than in onAppear, where setting useTLS would trigger its port swap.
+    // A new server starts out encrypted, on the usual TLS port.
     init(server: IRCServer? = nil) {
         self.server = server
         _name = State(initialValue: server?.name ?? "")
         _host = State(initialValue: server?.host ?? "")
-        _port = State(initialValue: String(server?.port ?? 6667))
+        _port = State(initialValue: String(server?.port ?? 6697))
         _password = State(initialValue: server?.password ?? "")
-        _useTLS = State(initialValue: server?.useTLS ?? false)
+        _useTLS = State(initialValue: server?.useTLS ?? true)
         _autoConnectOnLaunch = State(initialValue: server?.autoConnectOnLaunch ?? false)
         _nickname = State(initialValue: server?.nickname ?? "")
     }
@@ -1059,7 +1061,7 @@ struct ServerFormView: View {
             Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow { Text("Name:"); TextField("Display name", text: $name).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Server:"); TextField("irc.example.net", text: $host).textFieldStyle(.roundedBorder) }
-                GridRow { Text("Port:"); TextField("6667", text: $port).textFieldStyle(.roundedBorder) }
+                GridRow { Text("Port:"); TextField("6697", text: $port).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Password:"); SecureField("Optional", text: $password).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Nickname:"); TextField("Optional (uses default if blank)", text: $nickname).textFieldStyle(.roundedBorder) }
                 GridRow {
@@ -1105,8 +1107,9 @@ struct JoinChannelView: View {
     @Environment(ChatStore.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
-    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
-    private var canJoin: Bool { IRCName.isChannel(trimmedName) }
+    /// As for /join: several channels separated by commas, with `#` added where there's no prefix.
+    private var channels: [String] { MessageRouter.channelNames(name.filter { !$0.isWhitespace }) }
+    private var canJoin: Bool { !channels.isEmpty }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Join Channel").font(.headline)
@@ -1120,7 +1123,7 @@ struct JoinChannelView: View {
                 Button("Cancel") { dismiss() }
                 Button("Join") {
                     guard canJoin, let server = model.server(withID: model.pendingJoinServerID) else { return }
-                    model.joinChannel(trimmedName, on: server)
+                    model.joinChannels(channels, on: server)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

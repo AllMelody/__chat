@@ -134,7 +134,7 @@ nonisolated struct IRCSession {
         case "NOTICE":
             // A CTCP reply: we never send CTCP queries, so there's nothing to match it to.
             guard parameters.count >= 2, CTCPMessage(parsing: parameters[1]) == nil else { return Output() }
-            let channel = IRCName.isChannel(parameters[0]) ? parameters[0] : nil
+            let channel = statusMessageTarget(parameters[0])?.channel ?? (IRCName.isChannel(parameters[0]) ? parameters[0] : nil)
             return Output(events: [.notice(sender: sender, channel: channel, text: parameters[1], time: message.serverTime)])
 
         case "332": // RPL_TOPIC <nick> <channel> :<topic>

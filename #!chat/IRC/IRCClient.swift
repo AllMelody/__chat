@@ -52,13 +52,19 @@ final class IRCClient {
     }
 
     /// Leaves the server politely with QUIT, then closes the connection. No events follow.
-    func quit() {
+    /// `completion` runs, on whatever thread, once the QUIT has been written out or there
+    /// turned out to be none to write.
+    func quit(completion: @escaping @Sendable () -> Void = {}) {
         guard isRegistered, !isClosed, let connection else {
             close()
+            completion()
             return
         }
         isClosed = true
-        connection.send(Self.encode(.quit())) { _ in connection.close() }
+        connection.send(Self.encode(.quit())) { _ in
+            connection.close()
+            completion()
+        }
     }
 
     /// Drops the connection immediately, without a word to the server. No events follow.

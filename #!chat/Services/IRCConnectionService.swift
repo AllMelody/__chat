@@ -13,6 +13,9 @@ final class IRCConnectionService {
         case logAppended(ChatMessage)
         /// A line arrived for the server log, a channel, or a private conversation.
         case messageReceived(ChatMessage, MessageTargetType)
+        /// A NOTICE from `sender` (nil when the server sent it without a source), to us or,
+        /// with `channel`, to a channel.
+        case notice(sender: String?, channel: String?, text: String, time: Date?)
         /// The server accepted us under `nick`.
         case registered(nick: String)
         /// The connection ended before registration completed: it was refused, cut off, or
@@ -48,14 +51,20 @@ final class IRCConnectionService {
     private(set) var clients: [UUID: IRCClient] = [:]
     private var connectionTimeouts: [UUID: Task<Void, any Error>] = [:]
     private var pingTasks: [UUID: Task<Void, any Error>] = [:]
-    /// Monotonic, so wall-clock changes (NTP, manual edits) can't fake a dead connection.
-    private var lastPongReceived: [UUID: ContinuousClock.Instant] = [:]
+    /// Keep-alive PINGs sent to each server since it last answered one. Counting these, not
+    /// the time since the last PONG, means a timer that fires late (a napping app, a busy
+    /// Mac) only gives the server longer; it can't make a healthy connection look dead.
+    private var unansweredPings: [UUID: Int] = [:]
 
     // Message send queue (flood protection)
     private var messageQueue: [QueuedLine] = []
     private var queueTask: Task<Void, any Error>?
     private let burstLimit = 5
     private let queueInterval: Duration = .milliseconds(500)
+    /// How far ahead of the clock the lines sent so far reach, at one `queueInterval` each.
+    /// Lines go out at once while that's within `burstLimit` intervals of now, so the
+    /// allowance for a burst comes back only as fast as the queue would have sent.
+    private var floodHorizon: ContinuousClock.Instant = .now
 
     /// A line waiting its turn in the flood-protection queue.
     private struct QueuedLine {
@@ -147,28 +156,34 @@ final class IRCConnectionService {
     /// Full per-server teardown for the "close everything now" paths (sleep, network
     /// loss, a dead or timed-out connection, the connection ending on its own): cancel
     /// reconnection, ping monitoring and the connect-timeout timer, mark
-    /// the model disconnected, close the client, and drop per-server bookkeeping.
+    /// the model disconnected, close the client, and drop per-server bookkeeping,
+    /// including lines still waiting to be sent there.
     /// One shared checklist so the paths can't drift apart (network loss used to skip
     /// the timers, leaking a live connect-timeout that could double-schedule reconnects).
     private func tearDownConnection(for serverID: UUID) {
         cancelReconnection(for: serverID)
         pingTasks.removeValue(forKey: serverID)?.cancel()
-        lastPongReceived.removeValue(forKey: serverID)
+        unansweredPings.removeValue(forKey: serverID)
         connectionTimeouts.removeValue(forKey: serverID)?.cancel()
+        removeQueuedLines { $0.server.id == serverID }
 
         if let server = serverLookup?(serverID) {
             if [.connecting, .connected, .reconnecting].contains(server.connectionStatus) {
                 server.connectionStatus = .disconnected
             }
-            // Off the server, we're in no channel; rejoining brings fresh member lists.
-            for channel in server.channels {
-                channel.joined = false
-                channel.users.removeAll()
-            }
+            leaveAllChannels(on: server)
         }
 
         if let client = clients.removeValue(forKey: serverID) {
             client.close()
+        }
+    }
+
+    /// Off the server, we're in no channel; rejoining brings fresh member lists.
+    private func leaveAllChannels(on server: IRCServer) {
+        for channel in server.channels {
+            channel.joined = false
+            channel.removeAllUsers()
         }
     }
 
@@ -224,7 +239,7 @@ final class IRCConnectionService {
         server.connectionStatus = .connecting
         
         let statusText = server.displayAttempt > 0 ?
-            "Reconnecting to \(server.name) (attempt \(server.displayAttempt)/\(reconnection.maxAttempts))" :
+            "Reconnecting to \(server.name) (attempt \(server.displayAttempt))" :
             "Connecting to \(server.name) (\(server.host):\(server.port))"
         logToServer(statusText, on: server)
 
@@ -265,6 +280,18 @@ final class IRCConnectionService {
         
         logToServer("Disconnected from \(server.name)", on: server)
     }
+
+    /// Says goodbye to every server as the app quits, and waits, though not for long, until
+    /// the QUITs have been written out: the process is gone as soon as this returns.
+    func quitAllBeforeTermination() {
+        let written = DispatchGroup()
+        for client in clients.values {
+            written.enter()
+            client.quit { written.leave() }
+        }
+        clients.removeAll()
+        _ = written.wait(timeout: .now() + .seconds(1))
+    }
     
     private func setupConnectionTimeout(for server: IRCServer) {
         cancelConnectionTimeout(for: server)
@@ -297,38 +324,32 @@ final class IRCConnectionService {
     }
     
     /// Retries the connection as the reconnection policy says: the first attempt right away,
-    /// later ones after a pause, and none once the attempts run out. The connect itself always
-    /// runs as a task of its own, so it never starts in the middle of handling whatever ended
-    /// the previous connection.
+    /// later ones after longer and longer pauses, until one works or the user cancels. The
+    /// connect itself always runs as a task of its own, so it never starts in the middle of
+    /// handling whatever ended the previous connection.
     func scheduleReconnection(for server: IRCServer) {
         cancelReconnection(for: server.id)
-        // Retrying without a network would only use up attempts. The network's return
+        // Retrying without a network would only lengthen the pauses. The network's return
         // reconnects the server instead.
         guard !isOffline else { return }
 
-        switch reconnection.nextAttempt(for: server.id) {
-        case .giveUp:
-            server.connectionStatus = .reconnectionFailed
-            server.shouldAutoReconnect = false
-            logToServer("Failed to reconnect to \(server.name) after \(reconnection.maxAttempts) attempts", on: server)
+        let (attempt, delay) = reconnection.nextAttempt(for: server.id)
+        server.connectionStatus = .reconnecting
+        server.displayAttempt = attempt
+        // An immediate retry is announced by connect() alone.
+        if delay > .zero {
+            let pause = delay.formatted(.units(allowed: [.minutes, .seconds], width: .wide))
+            logToServer("Reconnecting to \(server.name) in \(pause)… (attempt \(attempt))", on: server)
+        }
 
-        case .retry(let attempt, let delay):
-            server.connectionStatus = .reconnecting
-            server.displayAttempt = attempt
-            // An immediate retry is announced by connect() alone.
-            if delay > .zero {
-                logToServer("Reconnecting to \(server.name) in \(delay.components.seconds) seconds… (attempt \(attempt)/\(reconnection.maxAttempts))", on: server)
-            }
-
-            // Task.sleep only throws on cancellation, which simply ends the task.
-            reconnectTasks[server.id] = Task { [weak self] in
-                if delay > .zero { try await Task.sleep(for: delay) }
-                // A cancel can land after the sleep finished but before we resumed on main.
-                try Task.checkCancellation()
-                guard let self else { return }
-                self.reconnectTasks[server.id] = nil
-                self.connect(server)
-            }
+        // Task.sleep only throws on cancellation, which simply ends the task.
+        reconnectTasks[server.id] = Task { [weak self] in
+            if delay > .zero { try await Task.sleep(for: delay) }
+            // A cancel can land after the sleep finished but before we resumed on main.
+            try Task.checkCancellation()
+            guard let self else { return }
+            self.reconnectTasks[server.id] = nil
+            self.connect(server)
         }
     }
 
@@ -343,7 +364,7 @@ final class IRCConnectionService {
     
     func startPingMonitoring(for server: IRCServer) {
         stopPingMonitoring(for: server)
-        lastPongReceived[server.id] = .now
+        unansweredPings[server.id] = 0
 
         guard clients[server.id] != nil else { return }
 
@@ -360,19 +381,20 @@ final class IRCConnectionService {
 
     private func stopPingMonitoring(for server: IRCServer) {
         pingTasks.removeValue(forKey: server.id)?.cancel()
-        lastPongReceived.removeValue(forKey: server.id)
+        unansweredPings.removeValue(forKey: server.id)
     }
     
     private func checkConnectionHealth(for server: IRCServer) {
         guard server.connectionStatus == .connected,
               let client = clients[server.id] else { return }
         
-        if let lastPong = lastPongReceived[server.id],
-           ContinuousClock.now - lastPong > .seconds(120) {
+        // Two PINGs in a row have gone unanswered: nobody's there.
+        if unansweredPings[server.id, default: 0] >= 2 {
             handleConnectionDead(for: server)
             return
         }
         
+        unansweredPings[server.id, default: 0] += 1
         client.send(.ping("\(Date.now.timeIntervalSince1970)"))
     }
     
@@ -474,17 +496,22 @@ final class IRCConnectionService {
         onEvent(.logAppended(msg), server)
         // A failed write ends the connection, which arrives as a .disconnected event.
         client.send(isAction ? .action(to: target.name, text) : .privateMessage(to: target.name, text))
+        floodHorizon = max(floodHorizon, .now) + queueInterval
+    }
+
+    /// Whether one more line can go out right now without outrunning the server's patience.
+    private var hasBurstAllowance: Bool {
+        max(floodHorizon, .now) + queueInterval <= ContinuousClock.now + queueInterval * burstLimit
     }
 
     private func enqueueLines(_ lines: [String], isAction: Bool, to target: MessageTarget, from server: IRCServer) {
-        let immediateCount = messageQueue.isEmpty ? min(lines.count, burstLimit) : 0
-
-        for line in lines.prefix(immediateCount) {
-            sendSingleLine(line, isAction: isAction, to: target, from: server)
-        }
-
-        for line in lines.dropFirst(immediateCount) {
-            messageQueue.append(QueuedLine(text: line, isAction: isAction, target: target, server: server))
+        for line in lines {
+            // Never ahead of lines already waiting: they'd arrive out of order.
+            if messageQueue.isEmpty, hasBurstAllowance {
+                sendSingleLine(line, isAction: isAction, to: target, from: server)
+            } else {
+                messageQueue.append(QueuedLine(text: line, isAction: isAction, target: target, server: server))
+            }
         }
 
         if !messageQueue.isEmpty && queueTask == nil {
@@ -591,9 +618,9 @@ final class IRCConnectionService {
             logServerEvent("MOTD:\n\(text)", for: serverID)
 
         case .pong:
-            lastPongReceived[serverID] = .now
+            unansweredPings[serverID] = 0
             // The first keep-alive round trip, a minute after registering, is what makes a
-            // reconnect count as successful and earns a fresh set of attempts.
+            // reconnect count as successful: the next drop is retried at once again.
             if let server = serverLookup?(serverID), server.displayAttempt > 0 {
                 resetReconnectionAttempts(for: server)
             }
@@ -611,9 +638,7 @@ final class IRCConnectionService {
             report(.messageReceived(chatMessage(message, nickname: client.nickname), .privateMessage(peer)), for: serverID)
 
         case .notice(let sender, let channel, let text, let time):
-            // "NOTICE from NickServ: …", "NOTICE from bot to #chan: …", or just "NOTICE: …"
-            let origin = (sender.map { " from \($0)" } ?? "") + (channel.map { " to \($0)" } ?? "")
-            logServerEvent("NOTICE\(origin): \(text)", time: time, for: serverID)
+            report(.notice(sender: sender, channel: channel, text: text, time: time), for: serverID)
 
         case .joined(let channel, let nick, let isSelf):
             report(.joined(channel: channel, nick: nick, isSelf: isSelf), for: serverID)
@@ -647,8 +672,8 @@ final class IRCConnectionService {
     }
 
     /// A server-log line reporting something the server said.
-    private func logServerEvent(_ text: String, time: Date? = nil, for serverID: UUID) {
-        let message = ChatMessage(time: time ?? Date(), text: text)
+    private func logServerEvent(_ text: String, for serverID: UUID) {
+        let message = ChatMessage(time: Date(), text: text)
         report(.messageReceived(message, .server), for: serverID)
     }
 
@@ -661,7 +686,6 @@ final class IRCConnectionService {
     /// A registered connection ended: tidy up, and let the owner decide about reconnecting.
     private func connectionDidEnd(for serverID: UUID, reason: String) {
         tearDownConnection(for: serverID)
-        removeQueuedLines { $0.server.id == serverID }
         report(.disconnected(reason: reason), for: serverID)
     }
 

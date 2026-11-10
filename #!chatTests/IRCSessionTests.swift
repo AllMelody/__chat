@@ -297,6 +297,11 @@ struct IRCSessionTests {
                 [.notice(sender: "NickServ", channel: nil, text: "This nickname is registered", time: nil)])
         #expect(session.handle(line(":bot!b@h NOTICE #swift :Meeting in five")).events ==
                 [.notice(sender: "bot", channel: "#swift", text: "Meeting in five", time: nil)])
+
+        // One for a channel's operators only is still the channel's.
+        _ = session.handle(line(":srv 005 alice STATUSMSG=@+ :are supported by this server"))
+        #expect(session.handle(line(":op!o@h NOTICE @#swift :ops, look at this")).events ==
+                [.notice(sender: "op", channel: "#swift", text: "ops, look at this", time: nil)])
     }
 
     // MARK: - CTCP
