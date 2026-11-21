@@ -619,7 +619,7 @@ final class ChatStore {
     }
 
     private func showErrorReply(_ text: String, about subject: String?, on server: IRCServer) {
-        log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: whereToShow(somethingAbout: subject, on: server))
+        log((subject.map { "\($0): " } ?? "") + text, in: whereToShow(somethingAbout: subject, on: server))
     }
 
     /// Shows a reply that answers what the user sent, such as a line of WHOIS, where they'll

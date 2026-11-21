@@ -641,7 +641,7 @@ final class IRCConnectionService {
     }
 
     private func handleSendFailure(for server: IRCServer, target: MessageTarget? = nil, reason: String) {
-        let msg = ChatMessage(time: Date(), text: "⚠️ Failed to send message: \(reason)")
+        let msg = ChatMessage(time: Date(), text: "Failed to send message: \(reason)")
 
         // Log to the appropriate target so the user sees the error where they're looking
         switch target {
