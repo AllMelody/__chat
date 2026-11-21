@@ -754,7 +754,7 @@ final class IRCConnectionService {
     private func chatMessage(_ message: IRCEvent.Message, statusTarget: String? = nil, nickname: String) -> ChatMessage {
         ChatMessage(time: message.time ?? Date(), text: message.text, senderNick: message.sender, isPrivmsg: true,
                     isFromMe: message.isOwn, isHighlight: !message.isOwn && Formatting.mentionsNick(nickname, in: message.text),
-                    isAction: message.isAction, statusTarget: statusTarget)
+                    isAction: message.isAction, statusTarget: statusTarget, hasServerTime: message.time != nil)
     }
 
     /// A server-log line reporting something the server said.

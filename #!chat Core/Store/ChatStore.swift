@@ -602,6 +602,8 @@ final class ChatStore {
     private func serverDidRegister(_ server: IRCServer, as nick: String) {
         connectionService.cancelConnectionTimeout(for: server)
         server.connectionStatus = .connected
+        // Before the channels are joined, which is when a bouncer replays them.
+        server.replayCutoff.connectionRegistered()
         server.currentNick = nick
 
         let statusText = server.displayAttempt > 0 ?
@@ -661,6 +663,7 @@ final class ChatStore {
     /// that's open with its sender, or else, like most of what services and the server
     /// itself have to say, in the server log.
     private func showNotice(_ text: String, from sender: String?, to channel: String?, time: Date?, on server: IRCServer) {
+        if let time, server.replayCutoff.isReplay(time, isRegistered: server.isConnected) { return }
         let origin = sender.map { " from \($0)" } ?? ""
         let time = time ?? Date()
         if let channel, let channelObj = server.channel(named: channel) {
@@ -701,6 +704,8 @@ final class ChatStore {
     }
 
     private func receive(_ message: ChatMessage, for target: IncomingTarget, on server: IRCServer) {
+        // Before anything else, so a replayed line doesn't reopen a closed private conversation.
+        if isReplayOfLogged(message, for: target, on: server) { return }
         switch target {
         case .server:
             server.log.append(message)
@@ -731,6 +736,20 @@ final class ChatStore {
             pm.countUnread(message, isOnScreen: isOnScreen(pm.id))
         }
         noteLogsChanged()
+    }
+
+    /// Whether `message` is a bouncer's replay of a line the log has from before (ReplayCutoff),
+    /// such as one of our own we logged as we sent it.
+    private func isReplayOfLogged(_ message: ChatMessage, for target: IncomingTarget, on server: IRCServer) -> Bool {
+        guard message.hasServerTime else { return false }
+        if server.replayCutoff.isReplay(message.time, isRegistered: server.isConnected) { return true }
+        guard message.isFromMe else { return false }
+        let log: [ChatMessage]? = switch target {
+        case .server: server.log
+        case .channel(let name): server.channel(named: name)?.log
+        case .privateConversation(let peer): server.privateConversation(with: peer)?.log
+        }
+        return log.map { ReplayCutoff.echoesSentLine(message, in: $0) } ?? false
     }
 
     /// Whether channels log other people's comings and goings (a preference; off by default).

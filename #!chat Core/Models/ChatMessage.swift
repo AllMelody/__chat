@@ -20,8 +20,11 @@ struct ChatMessage: Identifiable, Equatable {
     /// The server's reply to a command, ours or another client's: shown less prominently than
     /// what people say.
     let isReply: Bool
+    /// `time` is the server's (IRCv3 server-time): when the server, or a bouncer, first had the
+    /// line, rather than when it arrived here.
+    let hasServerTime: Bool
 
-    init(time: Date, text: String, senderNick: String? = nil, isPrivmsg: Bool = false, isFromMe: Bool = false, isHighlight: Bool = false, isAction: Bool = false, statusTarget: String? = nil, isReply: Bool = false) {
+    init(time: Date, text: String, senderNick: String? = nil, isPrivmsg: Bool = false, isFromMe: Bool = false, isHighlight: Bool = false, isAction: Bool = false, statusTarget: String? = nil, isReply: Bool = false, hasServerTime: Bool = false) {
         self.time = time
         self.text = text
         self.senderNick = senderNick
@@ -31,6 +34,7 @@ struct ChatMessage: Identifiable, Equatable {
         self.isAction = isAction
         self.statusTarget = statusTarget
         self.isReply = isReply
+        self.hasServerTime = hasServerTime
     }
 }
 

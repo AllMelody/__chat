@@ -39,6 +39,9 @@ final class IRCServer: Identifiable {
     /// sleep, or a network outage. Set when the user (or auto-connect on launch) connects;
     /// cleared by an explicit disconnect or a rejected registration.
     var shouldAutoReconnect: Bool = false
+    /// Which lines a bouncer replays on connecting are in the logs from before. Not shown, so
+    /// not observed.
+    @ObservationIgnored var replayCutoff = ReplayCutoff()
     
     enum ConnectionStatus {
         case disconnected
