@@ -194,7 +194,7 @@ private struct MessageRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(Self.line(for: message))
-                .font(.subheadline)
+                .font(.body)   // the size of what's typed in the composer
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
