@@ -8,9 +8,11 @@ struct ConversationView: View {
     @Binding var draft: String
     @State private var isShowingMembers = false
     @FocusState private var composerIsFocused: Bool
+    /// Bumped each time the user sends something.
+    @State private var sentCount = 0
 
     var body: some View {
-        LogView(messages: item.log, thumbnails: prefs.showImageThumbnails ? store.messageThumbnails : [:])
+        LogView(messages: item.log, thumbnails: prefs.showImageThumbnails ? store.messageThumbnails : [:], sentCount: sentCount)
             .safeAreaBar(edge: .bottom) { composer }
             .navigationTitle(item.name)
             .modifier(TopicSubtitle(channel: item.channel))
@@ -51,6 +53,7 @@ struct ConversationView: View {
         composerIsFocused = true
         guard store.handleInputFromComposer(draft) else { return }
         draft = ""
+        sentCount += 1
     }
 
     @ToolbarContentBuilder
@@ -112,12 +115,20 @@ private struct MemberList: View {
 
 // MARK: - Log
 
-/// The log, one row a line, kept scrolled to the end while the end is in view: as lines
-/// arrive, and as the keyboard comes and goes.
+/// The log, one row a line. It follows the newest line, as lines arrive and as the keyboard
+/// comes and goes, until the user scrolls away from it; scrolling back to it follows again.
+///
+/// The rows are laid out lazily, so the scroll view only estimates the height of those it
+/// hasn't shown, and its bottom edge is a guess: scrolling there can land past the last line,
+/// on nothing. Scrolling to the last line itself is exact, so that's what it does.
 private struct LogView: View {
     let messages: [ChatMessage]
     let thumbnails: [UUID: [MessageThumbnail]]
-    @State private var position = ScrollPosition(edge: .bottom)
+    /// Bumped each time the user sends something: the log goes back to its newest line, as
+    /// Messages does, and follows from there.
+    let sentCount: Int
+    @State private var position = ScrollPosition(idType: UUID.self)
+    @State private var following = LogFollowing()
 
     var body: some View {
         ScrollView {
@@ -131,28 +142,47 @@ private struct LogView: View {
         }
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .onScrollGeometryChange(for: LogGeometry.self, of: LogGeometry.init) { old, new in
-            if old.showsEnd, new.sizes != old.sizes {
-                position.scrollTo(edge: .bottom)
+        .onAppear(perform: scrollToEnd)
+        .onScrollTargetVisibilityChange(idType: UUID.self, threshold: 0.1) { ids in
+            following.visibleIDs = Set(ids)
+        }
+        .onScrollPhaseChange { oldPhase, newPhase in
+            switch (oldPhase, newPhase) {
+            case (_, .interacting):
+                following.followsEnd = false   // the user has the log in hand
+            case (.interacting, .idle), (.decelerating, .idle):
+                // Where they let it come to rest: following again if that's the end.
+                following.followsEnd = messages.last.map { following.visibleIDs.contains($0.id) } ?? true
+            default:
+                break
             }
         }
+        .onChange(of: messages.last?.id) {
+            if following.followsEnd { scrollToEnd() }
+        }
+        .onChange(of: sentCount) {
+            following.followsEnd = true
+            scrollToEnd()
+        }
+        // The keyboard coming or going changes how much of the log shows.
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.containerSize.height - $0.contentInsets.top - $0.contentInsets.bottom }) { _, _ in
+            if following.followsEnd { scrollToEnd() }
+        }
+    }
+
+    private func scrollToEnd() {
+        guard let last = messages.last else { return }
+        position.scrollTo(id: last.id, anchor: .bottom)
     }
 }
 
-/// What LogView watches of its scroll view.
-private struct LogGeometry: Equatable {
-    /// The content's height, and the height of the part of the scroll view it shows through.
-    /// One changes when lines come or go, the other when the keyboard does.
-    var sizes: [CGFloat]
-    /// The end of the log is in view, or nearly.
-    var showsEnd: Bool
-
-    nonisolated init(_ geometry: ScrollGeometry) {
-        let visibleHeight = geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
-        sizes = [geometry.contentSize.height, visibleHeight]
-        let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom
-        showsEnd = visibleBottom >= geometry.contentSize.height - 8
-    }
+/// What LogView keeps track of as the log scrolls. A plain object, so that keeping track
+/// doesn't redraw the log.
+private final class LogFollowing {
+    /// Whether to keep the newest line in view.
+    var followsEnd = true
+    /// The rows on screen, at least a little.
+    var visibleIDs: Set<UUID> = []
 }
 
 /// One line of the log: the time, who said it, what they said with its web links tappable,
