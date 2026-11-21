@@ -1,6 +1,12 @@
 {
   "images" : [
     {
+      "filename" : "ChatGPT Image Aug 15, 2025 at 10_27_28 PM.png",
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "16x16"

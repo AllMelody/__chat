@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Foundation
 import Network
 
@@ -51,9 +55,9 @@ final class IRCConnectionService {
 
     /// Receives every event, in order, with the server it concerns.
     var onEvent: (Event, IRCServer) -> Void = { _, _ in }
-    /// Called when the connections that were closed can come back: after a wake from sleep, or
-    /// when the network returns after an outage. The time to reconnect servers that should be
-    /// connected.
+    /// Called when the connections that were closed can come back: after a wake from sleep (on
+    /// iOS, a return from the background that outlasted the connections), or when the network
+    /// returns after an outage. The time to reconnect servers that should be connected.
     var onCanReconnect: () -> Void = {}
 
     // Clients and connection state
@@ -105,13 +109,26 @@ final class IRCConnectionService {
         self.serverLookup = lookup
     }
 
+    #if os(macOS)
     // Typed-notification tokens deregister themselves when released.
     private var sleepObserver: NotificationCenter.ObservationToken?
     private var wakeObserver: NotificationCenter.ObservationToken?
+    #else
+    private var lifecycleObservers: [any NSObjectProtocol] = []
+    /// The extra time iOS gives the app after it leaves the screen, while that lasts.
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// Set when the connections closed for the app being in the background; they come back
+    /// with it.
+    private var closedInBackground = false
+    #endif
 
     init() {
         setupNetworkMonitoring()
+        #if os(macOS)
         setupSleepWakeMonitoring()
+        #else
+        setupBackgroundMonitoring()
+        #endif
     }
 
     deinit {
@@ -130,6 +147,7 @@ final class IRCConnectionService {
         }
     }
 
+    #if os(macOS)
     // MARK: - Sleep/Wake Monitoring
 
     private func setupSleepWakeMonitoring() {
@@ -149,9 +167,63 @@ final class IRCConnectionService {
         suspendConnections(reason: "Going to sleep")
     }
 
-    /// Drops every connection, and any retry waiting to happen, until the Mac wakes or the
-    /// network returns; `onCanReconnect` then brings back the servers that should be
-    /// connected.
+    private func handleWake() {
+        // After waking, reconnect all servers that should auto-reconnect.
+        onCanReconnect()
+    }
+    #else
+    // MARK: - Background Monitoring
+
+    /// iOS suspends an app soon after it leaves the screen, and its connections die with it,
+    /// so the app stays connected only while it's in front: a quick trip to another app keeps
+    /// the connections, and a longer one closes them until the app comes back.
+    private func setupBackgroundMonitoring() {
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.handleEnteredBackground() }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.handleWillEnterForeground() }
+            },
+        ]
+    }
+
+    /// Asks for time to stay connected in the background, and closes the connections when it
+    /// runs out, or at once without any.
+    private func handleEnteredBackground() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Stay connected") { [weak self] in
+            self?.closeForBackground()
+        }
+        if backgroundTask == .invalid { closeForBackground() }
+    }
+
+    private func closeForBackground() {
+        // Like going to sleep: no time to wait for answers, so just close the sockets.
+        suspendConnections(reason: "In the background")
+        closedInBackground = true
+        endBackgroundTask()
+    }
+
+    private func handleWillEnterForeground() {
+        endBackgroundTask()
+        if closedInBackground {
+            closedInBackground = false
+            onCanReconnect()
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+    #endif
+
+    /// Drops every connection, and any retry waiting to happen, until the Mac wakes (the app
+    /// returns, on iOS) or the network returns; `onCanReconnect` then brings back the
+    /// servers that should be connected.
     private func suspendConnections(reason: String) {
         for serverID in Set(clients.keys).union(reconnectTasks.keys) {
             if let server = serverLookup?(serverID) {
@@ -200,11 +272,6 @@ final class IRCConnectionService {
         queueTask?.cancel()
         queueTask = nil
         messageQueue.removeAll()
-    }
-
-    private func handleWake() {
-        // After waking, reconnect all servers that should auto-reconnect.
-        onCanReconnect()
     }
 
     // MARK: - Network Monitoring

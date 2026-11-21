@@ -1,6 +1,8 @@
-import Foundation
-import AppKit
+import CoreGraphics
 import CryptoKit
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import os
 
 final class ImageCacheService {
@@ -12,10 +14,10 @@ final class ImageCacheService {
     // Called on the main thread whenever thumbnails change for a message
     var onThumbnailUpdated: ((UUID, [MessageThumbnail]) -> Void)?
     
-    // Image cache using native macOS APIs
-    private let imageCache = NSCache<NSString, NSImage>()
+    // Decoded images, which NSCache gives up when memory runs short
+    private let imageCache = NSCache<NSString, CGImage>()
     private let imageCacheDirectory: URL = {
-        // Use Caches directory - macOS can purge this under disk pressure
+        // Use Caches directory - the system can purge this under disk pressure
         let cacheDir = URL.cachesDirectory.appending(path: "ChatApp/ImageCache", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         return cacheDir
@@ -106,7 +108,7 @@ final class ImageCacheService {
         SHA256.hash(data: Data(urlString.utf8)).map { String(format: "%02x", $0) }.joined()
     }
     
-    private func cachedImage(for urlString: String) -> NSImage? {
+    private func cachedImage(for urlString: String) -> CGImage? {
         let cacheKey = cacheKeyForURL(urlString)
 
         // Check memory cache first
@@ -117,7 +119,8 @@ final class ImageCacheService {
         // Check disk cache
         let fileURL = imageCacheDirectory.appending(path: "\(cacheKey).cache")
         guard let data = try? Data(contentsOf: fileURL),
-              let image = NSImage(data: data) else {
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             return nil
         }
 
@@ -131,13 +134,13 @@ final class ImageCacheService {
 
     /// Roughly what an image costs in memory once drawn (4 bytes a pixel), so the memory
     /// cache's total cost limit means something.
-    private static func memoryCost(of image: NSImage) -> Int {
-        image.representations.map { $0.pixelsWide * $0.pixelsHigh * 4 }.max() ?? 0
+    private static func memoryCost(of image: CGImage) -> Int {
+        image.width * image.height * 4
     }
     
     // MARK: - Thumbnail Processing
 
-    /// Forgets the in-memory thumbnail entries (and the NSImages they hold strongly) for
+    /// Forgets the in-memory thumbnail entries (and the images they hold strongly) for
     /// messages that no longer exist — trimmed past the log cap, or removed along with their
     /// channel/PM/server. Images still loading for them are dropped when they arrive. The
     /// NSCache and disk caches are untouched: they're URL-keyed and bounded on their own.
@@ -149,7 +152,7 @@ final class ImageCacheService {
 
     /// Sets the loaded image for `url` in a message's thumbnail list (appending the entry if
     /// it's new) and publishes the updated list.
-    private func setThumbnailImage(_ image: NSImage, url: String, messageID: UUID) {
+    private func setThumbnailImage(_ image: CGImage, url: String, messageID: UUID) {
         guard var list = messageThumbnails[messageID] else { return }   // discarded meanwhile
         if let idx = list.firstIndex(where: { $0.url == url }) {
             list[idx].image = image
@@ -280,9 +283,8 @@ final class ImageCacheService {
             guard let data, let cg = await Self.makeThumbnail(from: data, cachingPNGAt: fileURL),
                   let self else { return }
 
-            let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-            self.imageCache.setObject(img, forKey: memoryKey as NSString, cost: Self.memoryCost(of: img))
-            self.setThumbnailImage(img, url: cacheKey, messageID: messageID)
+            self.imageCache.setObject(cg, forKey: memoryKey as NSString, cost: Self.memoryCost(of: cg))
+            self.setThumbnailImage(cg, url: cacheKey, messageID: messageID)
         }
     }
 
@@ -301,7 +303,7 @@ final class ImageCacheService {
     }
 
     /// Decodes a downscaled thumbnail and writes it to the disk cache, off the main actor.
-    /// Returns a CGImage (Sendable) rather than an NSImage so it can cross back to main.
+    /// A CGImage is Sendable, so it can cross back to main.
     @concurrent
     private nonisolated static func makeThumbnail(from data: Data, cachingPNGAt fileURL: URL) async -> CGImage? {
         guard !data.isEmpty, let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
@@ -316,8 +318,12 @@ final class ImageCacheService {
 
         // The disk cache is best-effort (Caches can be purged at any time), so a failed write
         // only means the thumbnail is re-fetched next launch.
-        if let pngData = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) {
-            try? pngData.write(to: fileURL)
+        let pngData = NSMutableData()
+        if let destination = CGImageDestinationCreateWithData(pngData, UTType.png.identifier as CFString, 1, nil) {
+            CGImageDestinationAddImage(destination, cg, nil)
+            if CGImageDestinationFinalize(destination) {
+                try? (pngData as Data).write(to: fileURL)
+            }
         }
         return cg
     }

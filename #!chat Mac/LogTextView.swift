@@ -367,8 +367,9 @@ struct LogTextView: NSViewRepresentable {
                 let maxSize = NSSize(width: 200, height: 200)
                 let attachment: NSTextAttachment
 
-                if let img = item.image {
+                if let cg = item.image {
                     // Real image - use actual prepared size
+                    let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
                     attachment = makeImageAttachment(img, maxSize: maxSize)
                 } else {
                     // Placeholder - reserve exact space that the image will occupy

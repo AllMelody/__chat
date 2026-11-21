@@ -1,5 +1,5 @@
+import CoreGraphics
 import Foundation
-import AppKit
 
 struct ChatMessage: Identifiable, Equatable {
     let id = UUID()
@@ -32,5 +32,6 @@ struct ChatMessage: Identifiable, Equatable {
 
 struct MessageThumbnail {
     let url: String
-    var image: NSImage?
+    /// Nil until it has loaded. Its size in pixels is the size to show it at, in points.
+    var image: CGImage?
 }

@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 import Observation
 
@@ -35,6 +37,7 @@ final class ChatStore {
     var pendingCloseConversationID: UUID?
     var isPresentingTopicEditor: Bool = false
 
+    #if os(macOS)
     /// A Find command for the log on screen (Edit ▸ Find). Numbered, so that asking for the
     /// same thing twice counts twice.
     struct FindRequest: Equatable {
@@ -42,18 +45,19 @@ final class ChatStore {
         var number: Int
     }
     var findRequest: FindRequest?
+    #endif
     
     // Preferences
     weak var preferences: AppPreferences? { didSet { mirrorPreferencesToServices() } }
     @ObservationIgnored private var preferencesMirrorTask: Task<Void, Never>?
-    @ObservationIgnored private var dockBadgeTask: Task<Void, Never>?
+    @ObservationIgnored private var badgeTask: Task<Void, Never>?
     @ObservationIgnored private var applicationObservers: [any NSObjectProtocol] = []
     
     init() {
         setupServices()
         loadServers()
         observeApplication()
-        mirrorAttentionToDock()
+        mirrorAttentionToBadge()
         // Unit tests run inside the app, which mustn't go connecting to servers meanwhile.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Delay auto-connect to ensure UI is ready
@@ -88,10 +92,10 @@ final class ChatStore {
     private func observeApplication() {
         let center = NotificationCenter.default
         applicationObservers = [
-            center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            center.addObserver(forName: Platform.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.markSelectionRead() }
             },
-            center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            center.addObserver(forName: Platform.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.connectionService.quitAllBeforeTermination() }
             },
         ]
@@ -102,7 +106,7 @@ final class ChatStore {
     /// Whether the user is plainly looking at a conversation: the app is in front, and it's
     /// the one selected.
     private func isOnScreen(_ itemID: UUID) -> Bool {
-        NSApp.isActive && selectedItemID == itemID
+        Platform.isAppActive && selectedItemID == itemID
     }
 
     /// What's waiting that was meant for us: unread private messages, and unread mentions in
@@ -114,18 +118,18 @@ final class ChatStore {
         }
     }
 
-    /// Shows `attentionCount` as the Dock icon's badge. Observations emits the current value
+    /// Shows `attentionCount` as the app icon's badge. Observations emits the current value
     /// first, then every change.
-    private func mirrorAttentionToDock() {
+    private func mirrorAttentionToBadge() {
         let counts = Observations { [weak self] in self?.attentionCount ?? 0 }
-        dockBadgeTask = Task {
+        badgeTask = Task {
             for await count in counts {
-                NSApplication.shared.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+                Platform.showBadge(count)
             }
         }
     }
 
-    /// Posts a macOS notification about a message, unless the user is plainly already
+    /// Posts a notification about a message, unless the user is plainly already
     /// looking at the conversation (app active + conversation selected) or the message is
     /// old backlog replayed on reconnect (ZNC playback carries server-time) rather than
     /// live traffic.
@@ -252,8 +256,12 @@ final class ChatStore {
 
     /// After one of `server`'s conversations closes: if it was on screen, show the server.
     private func selectServerIfSelectionIsGone(_ server: IRCServer) {
-        if selectedItem == nil { selectedItemID = server.id }
+        if selectionIsGone { selectedItemID = server.id }
     }
+
+    /// Something was selected, and it's gone. (Nothing selected is no loss: on an iPhone, that's
+    /// the list of conversations on screen, which should stay there.)
+    private var selectionIsGone: Bool { selectedItemID != nil && selectedItem == nil }
     
     // MARK: - Server CRUD
     
@@ -295,7 +303,7 @@ final class ChatStore {
         discardThumbnails(for: server.log)
         for channel in server.channels { discardThumbnails(for: channel.log) }
         for pm in server.privateConversations { discardThumbnails(for: pm.log) }
-        if selectedItem == nil { selectedItemID = servers.first?.id }
+        if selectionIsGone { selectedItemID = servers.first?.id }
     }
     
     func server(withID id: UUID?) -> IRCServer? {
@@ -364,10 +372,12 @@ final class ChatStore {
         }
     }
 
+    #if os(macOS)
     /// Passes a Find command on to the log view.
     func find(_ action: NSTextFinder.Action) {
         findRequest = FindRequest(action: action, number: (findRequest?.number ?? 0) + 1)
     }
+    #endif
 
     /// Moves the sidebar selection by `offset` (wrapping).
     func navigateSidebar(by offset: Int) {
@@ -542,8 +552,8 @@ final class ChatStore {
         }
     }
 
-    /// After a wake from sleep or a network outage, reconnects the servers that should be
-    /// connected.
+    /// After a wake from sleep, a network outage, or (on iOS) a long time in the background,
+    /// reconnects the servers that should be connected.
     private func reconnectServers() {
         let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout]
         for server in servers where server.shouldAutoReconnect && disconnectedStates.contains(server.connectionStatus) {

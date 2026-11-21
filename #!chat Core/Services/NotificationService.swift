@@ -1,8 +1,11 @@
+#if os(macOS)
 import AppKit
+#endif
+import Foundation
 import os
 import UserNotifications
 
-/// Posts macOS user notifications for mentions and private messages, and routes notification
+/// Posts user notifications for mentions and private messages, and routes notification
 /// clicks back to the conversation that triggered them.
 ///
 /// Threading: create and use on the main thread (owned by ChatStore). Delegate callbacks
@@ -19,7 +22,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     override init() {
         super.init()
         center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound]) { _, error in
+        // On iOS the app icon's badge counts what's waiting, as the Dock's does on the Mac
+        // (ChatStore.attentionCount); there, it takes the user's permission.
+        #if os(macOS)
+        let options: UNAuthorizationOptions = [.alert, .sound]
+        #else
+        let options: UNAuthorizationOptions = [.alert, .sound, .badge]
+        #endif
+        center.requestAuthorization(options: options) { _, error in
             if let error { Self.logger.error("Notification authorization failed: \(String(describing: error))") }
         }
     }
@@ -50,7 +60,10 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         guard let idString = response.notification.request.content.userInfo["itemID"] as? String,
               let itemID = UUID(uuidString: idString) else { return }
         await MainActor.run {
+            // On iOS, tapping the notification has already brought the app to the front.
+            #if os(macOS)
             NSApp.activate()
+            #endif
             onSelectItem?(itemID)
         }
     }
