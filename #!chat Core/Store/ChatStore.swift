@@ -192,6 +192,8 @@ final class ChatStore {
     /// outcome appears. `keys` go with `names` in order, as far as they reach.
     func joinChannels(_ names: [String], keys: [String] = [], on server: IRCServer) {
         for (index, name) in names.enumerated() {
+            // Asked for, the join is news, even into a channel a reconnect is rejoining.
+            server.channel(named: name)?.isRejoining = false
             connectionService.joinChannel(name, key: index < keys.count ? keys[index] : nil, on: server)
         }
         if let first = names.first, let channel = server.channel(named: first) {
@@ -618,6 +620,9 @@ final class ChatStore {
         server.shouldAutoReconnect = true
 
         for channel in server.channels where !channel.wasKicked {
+            // Back into a channel we were in before the connection dropped: on iOS that's every
+            // return from the background, and the log has the join from the first time.
+            channel.isRejoining = channel.hasBeenJoined
             connectionService.joinChannel(channel.name, key: channel.key, on: server)
         }
 
@@ -768,6 +773,10 @@ final class ChatStore {
         channelObj.wasKicked = false
         channelObj.isSaved = true
         persistServers()
+        let isRejoin = channelObj.isRejoining
+        channelObj.isRejoining = false
+        channelObj.hasBeenJoined = true
+        guard !isRejoin else { return }
         let message = ChatMessage(time: Date(), text: "Joined \(channel)")
         channelObj.log.append(message)
         server.log.append(message)
@@ -812,7 +821,13 @@ final class ChatStore {
     private func topicChanged(to topic: String, in channel: String, by nick: String?, on server: IRCServer) {
         guard let channelObj = server.channel(named: channel) else { return }
 
-        channelObj.topic = topic.isEmpty ? nil : topic
+        // The topic every join brings (no setter): logged when it's new to the log, or the
+        // user asked for it with /topic, but not again on each rejoin after a reconnect.
+        let newTopic = topic.isEmpty ? nil : topic
+        let isNews = nick != nil || newTopic != channelObj.topic
+            || answerWindows[server.id, default: AnswerWindow()].isAnswer()
+        channelObj.topic = newTopic
+        guard isNews else { return }
         let logText = nick.map { "\($0) changed the topic to: \(topic)" } ?? "Topic: \(topic)"
         channelObj.log.append(ChatMessage(time: Date(), text: logText))
         noteLogsChanged()

@@ -22,6 +22,12 @@ final class IRCChannel: Identifiable {
     /// Saved with its server, to join again the next time the app launches: a channel we've
     /// been in and haven't parted or been kicked from.
     var isSaved: Bool = false
+    /// We've been in the channel since the app started, so its log has a join from then. Not
+    /// shown, so not observed.
+    @ObservationIgnored var hasBeenJoined = false
+    /// Being joined again by a reconnect, rather than by the user: the join it brings needn't
+    /// be logged again (ChatStore.userJoined).
+    @ObservationIgnored var isRejoining = false
 
     init(name: String) { self.name = name }
 
