@@ -28,6 +28,11 @@ struct ContentView: View {
             .onChange(of: store.selectedItemID) { _, _ in focusComposer() }
             .sheet(isPresented: $store.isPresentingAddServer) { ServerFormView() }
             .sheet(isPresented: $store.isPresentingJoinChannel) { JoinChannelView() }
+            .sheet(isPresented: $store.isPresentingChangeNickname) {
+                if let server = store.server(withID: store.pendingNicknameServerID) {
+                    ChangeNicknameView(server: server)
+                }
+            }
             .sheet(isPresented: $store.isPresentingEditServer) {
                 Group {
                     if let server = store.server(withID: store.pendingEditServerID) {
@@ -150,6 +155,7 @@ struct ContentView: View {
                                 store.pendingJoinServerID = server.id
                                 store.isPresentingJoinChannel = true
                             },
+                            changeNickname: { store.requestNicknameChange(on: server) },
                             editServer: {
                                 store.pendingEditServerID = server.id
                                 store.isPresentingEditServer = true

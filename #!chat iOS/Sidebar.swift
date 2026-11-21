@@ -156,6 +156,7 @@ struct ServerActions: View {
                 store.pendingJoinServerID = server.id
                 store.isPresentingJoinChannel = true
             }
+            Button("Change Nickname…", systemImage: "person.text.rectangle") { store.requestNicknameChange(on: server) }
         case .connecting, .reconnecting:
             Button("Cancel Connection", systemImage: "xmark.circle") { store.disconnect(server) }
         case .disconnected, .connectionTimeout:

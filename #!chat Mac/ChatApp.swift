@@ -50,6 +50,8 @@ struct ChatApp: App {
                     }
                     .keyboardShortcut("j")
                     .disabled(server?.isConnected != true)
+                    Button("Change Nickname…") { if let server { store.requestNicknameChange(on: server) } }
+                        .disabled(server?.isConnected != true)
                     Button("Edit Server…") {
                         store.pendingEditServerID = server?.id
                         store.isPresentingEditServer = true

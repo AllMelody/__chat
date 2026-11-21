@@ -127,6 +127,45 @@ struct JoinChannelView: View {
     }
 }
 
+/// Asks for a new nickname on a connected server, starting from the one in use.
+struct ChangeNicknameView: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let server: IRCServer
+    @State private var nickname: String
+
+    init(server: IRCServer) {
+        self.server = server
+        _nickname = State(initialValue: server.currentNick ?? "")
+    }
+
+    private var trimmed: String { nickname.trimmingCharacters(in: .whitespaces) }
+    private var canChange: Bool { IRCName.isValidNickname(trimmed) && trimmed != server.currentNick }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Change Nickname").font(.headline)
+            HStack {
+                Text("Nickname:")
+                TextField("Nickname", text: $nickname)
+                    .textFieldStyle(.roundedBorder)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Change") {
+                    store.changeNickname(to: trimmed, on: server)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canChange)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+}
+
 struct TopicEditorView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss

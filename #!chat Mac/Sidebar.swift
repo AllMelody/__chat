@@ -37,6 +37,7 @@ struct ServerRow: View {
     let connect: () -> Void
     let disconnect: () -> Void
     let joinChannelPrompt: () -> Void
+    let changeNickname: () -> Void
     let editServer: () -> Void
     let deleteServer: () -> Void
 
@@ -64,6 +65,7 @@ struct ServerRow: View {
             if server.isConnected {
                 Button("Disconnect", action: disconnect)
                 Button("Join Channel…", action: joinChannelPrompt)
+                Button("Change Nickname…", action: changeNickname)
             } else if isConnecting {
                 Button("Cancel Connection", action: disconnect)
             } else {

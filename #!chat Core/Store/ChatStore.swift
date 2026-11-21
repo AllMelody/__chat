@@ -30,6 +30,8 @@ final class ChatStore {
     var isPresentingEditServer: Bool = false
     var isPresentingJoinChannel: Bool = false
     var pendingJoinServerID: UUID?
+    var isPresentingChangeNickname: Bool = false
+    var pendingNicknameServerID: UUID?
     var pendingEditServerID: UUID?
     var isPresentingDeleteServer: Bool = false
     var pendingDeleteServerID: UUID?
@@ -295,6 +297,28 @@ final class ChatStore {
     func requestDeletion(of server: IRCServer) {
         pendingDeleteServerID = server.id
         isPresentingDeleteServer = true
+    }
+
+    /// Asks the user for a new nickname on `server`, for `changeNickname` to ask the server for.
+    func requestNicknameChange(on server: IRCServer) {
+        pendingNicknameServerID = server.id
+        isPresentingChangeNickname = true
+    }
+
+    /// Asks the server for a new nickname, as /nick does; it confirms the change, or refuses it,
+    /// in a reply. It's for this connection: connecting again uses the server's Nickname setting.
+    func changeNickname(to nick: String, on server: IRCServer) {
+        let here = whereToShow(somethingAbout: nil, on: server)
+        guard connectionService.isRegistered(server.id), let client = connectionService.clients[server.id] else {
+            log("Not connected.", in: here)
+            return
+        }
+        guard IRCName.isValidNickname(nick) else {
+            log("Invalid nickname.", in: here)
+            return
+        }
+        client.send(.nick(nick))
+        log("Changing nick to \(nick)…", in: here)
     }
 
     func deleteServer(_ server: IRCServer) {
@@ -869,11 +893,7 @@ extension ChatStore {
             }
 
         case .nick(let nick):
-            guard let client else { feedback("Not connected."); break }
-            guard IRCName.isValidNickname(nick) else { feedback("Invalid nickname."); break }
-            // The server confirms the change (or refuses it) in a reply.
-            client.send(.nick(nick))
-            feedback("Changing nick to \(nick)…")
+            changeNickname(to: nick, on: server)
 
         case .msg(let target, let message):
             guard client != nil else { feedback("Not connected."); return false }

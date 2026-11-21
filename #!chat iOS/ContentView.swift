@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var draft = ""
     @State private var isPresentingSettings = false
     @State private var channelsToJoin = ""
+    @State private var newNickname = ""
 
     var body: some View {
         @Bindable var store = store
@@ -42,6 +43,17 @@ struct ContentView: View {
             Button("Join", action: joinChannels)
             Button("Cancel", role: .cancel) { channelsToJoin = "" }
         }
+        .alert("Change Nickname", isPresented: $store.isPresentingChangeNickname) {
+            TextField("Nickname", text: $newNickname)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Change", action: changeNickname)
+            Button("Cancel", role: .cancel) {}
+        }
+        .onChange(of: store.isPresentingChangeNickname) { _, isPresenting in
+            // Start from the nickname in use.
+            if isPresenting { newNickname = store.server(withID: store.pendingNicknameServerID)?.currentNick ?? "" }
+        }
         .alert("Delete Server?", isPresented: $store.isPresentingDeleteServer,
                presenting: store.server(withID: store.pendingDeleteServerID)) { server in
             Button("Delete", role: .destructive) { store.deleteServer(server) }
@@ -58,6 +70,14 @@ struct ContentView: View {
                 Text("Your messages with \(conversation.name) will be cleared.")
             }
         }
+    }
+
+    /// Asks for the nickname typed, unless it's the one in use. One that isn't a nickname gets
+    /// said so in the log.
+    private func changeNickname() {
+        let nick = newNickname.trimmingCharacters(in: .whitespaces)
+        guard let server = store.server(withID: store.pendingNicknameServerID), nick != server.currentNick else { return }
+        store.changeNickname(to: nick, on: server)
     }
 
     /// As for /join: several channels separated by commas, with `#` added where there's no prefix.
