@@ -49,7 +49,11 @@ struct ServerFormView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        // Adding a server selects it, which on the Mac shows it in the sidebar;
+                        // here it would open its empty log. Stay where the user was: the list.
+                        let selection = store.selectedItemID
                         draft.save(editing: server, in: store)
+                        store.selectedItemID = selection
                         dismiss()
                     }
                     .disabled(!draft.canSave)

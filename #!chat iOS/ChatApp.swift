@@ -21,6 +21,8 @@ struct ChatApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                // Links in the log open in Safari's view inside the app, not in Safari.
+                .onOpenURL(prefersInApp: true)
                 .environment(store)
                 .environment(preferences)
         }
