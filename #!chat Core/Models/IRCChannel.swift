@@ -76,8 +76,9 @@ final class IRCChannel: Identifiable {
     }
 }
 
+/// A conversation with one other person, by private messages.
 @Observable
-final class IRCPrivateMessage: Identifiable {
+final class IRCPrivateConversation: Identifiable {
     let id = UUID()
     var nickname: String
     var log: [ChatMessage] = []

@@ -13,7 +13,7 @@ final class IRCServer: Identifiable {
     /// `password` as the server's.
     var useSASL: Bool = false
     var channels: [IRCChannel] = []
-    var privateMessages: [IRCPrivateMessage] = []
+    var privateConversations: [IRCPrivateConversation] = []
     var log: [ChatMessage] = []
     var autoConnectOnLaunch: Bool = false
     // Last known nickname for this server (set on register or nick change)
@@ -68,9 +68,9 @@ final class IRCServer: Identifiable {
         channels.first { IRCName.equal($0.name, name) }
     }
 
-    /// Existing PM conversation with this nick
-    func privateMessage(with nickname: String) -> IRCPrivateMessage? {
-        privateMessages.first { IRCName.equal($0.nickname, nickname) }
+    /// Existing private conversation with this nick
+    func privateConversation(with nickname: String) -> IRCPrivateConversation? {
+        privateConversations.first { IRCName.equal($0.nickname, nickname) }
     }
 
     /// Gets existing channel or creates a new one
@@ -81,11 +81,11 @@ final class IRCServer: Identifiable {
         return channel
     }
 
-    /// Gets existing PM or creates a new one
-    func getOrCreatePrivateMessage(with nickname: String) -> IRCPrivateMessage {
-        if let existing = privateMessage(with: nickname) { return existing }
-        let pm = IRCPrivateMessage(nickname: nickname)
-        privateMessages.append(pm)
+    /// Gets existing private conversation or creates a new one
+    func getOrCreatePrivateConversation(with nickname: String) -> IRCPrivateConversation {
+        if let existing = privateConversation(with: nickname) { return existing }
+        let pm = IRCPrivateConversation(nickname: nickname)
+        privateConversations.append(pm)
         return pm
     }
 

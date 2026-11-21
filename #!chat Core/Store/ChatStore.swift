@@ -14,7 +14,7 @@ final class ChatStore {
     var servers: [IRCServer] = [] { didSet { persistServers() } }
 
     // Selection (server or channel id)
-    var selectedNodeID: UUID?
+    var selectedItemID: UUID?
 
     // Thumbnail data - stored here so @Observable triggers view updates
     var messageThumbnails: [UUID: [MessageThumbnail]] = [:]
@@ -68,8 +68,8 @@ final class ChatStore {
         connectionService.onEvent = { [weak self] event, server in
             self?.handle(event, on: server)
         }
-        connectionService.onNetworkAvailable = { [weak self] in
-            self?.reconnectAfterNetworkChange()
+        connectionService.onCanReconnect = { [weak self] in
+            self?.reconnectServers()
         }
         connectionService.configureServerLookup { [weak self] serverID in
             self?.servers.first { $0.id == serverID }
@@ -77,8 +77,8 @@ final class ChatStore {
         imageCache.onThumbnailUpdated = { [weak self] messageID, thumbnails in
             self?.messageThumbnails[messageID] = thumbnails
         }
-        notificationService.onSelectNode = { [weak self] nodeID in
-            guard let self, let item = self.sidebarItems.first(where: { $0.id == nodeID }) else { return }
+        notificationService.onSelectItem = { [weak self] itemID in
+            guard let self, let item = self.sidebarItems.first(where: { $0.id == itemID }) else { return }
             self.select(item)
         }
     }
@@ -101,8 +101,8 @@ final class ChatStore {
 
     /// Whether the user is plainly looking at a conversation: the app is in front, and it's
     /// the one selected.
-    private func isOnScreen(_ nodeID: UUID) -> Bool {
-        NSApp.isActive && selectedNodeID == nodeID
+    private func isOnScreen(_ itemID: UUID) -> Bool {
+        NSApp.isActive && selectedItemID == itemID
     }
 
     /// What's waiting that was meant for us: unread private messages, and unread mentions in
@@ -110,7 +110,7 @@ final class ChatStore {
     var attentionCount: Int {
         servers.reduce(0) { total, server in
             total + server.channels.reduce(0) { $0 + $1.mentionCount }
-                + server.privateMessages.reduce(0) { $0 + $1.unreadCount }
+                + server.privateConversations.reduce(0) { $0 + $1.unreadCount }
         }
     }
 
@@ -129,15 +129,15 @@ final class ChatStore {
     /// looking at the conversation (app active + conversation selected) or the message is
     /// old backlog replayed on reconnect (ZNC playback carries server-time) rather than
     /// live traffic.
-    private func notify(_ title: String, about message: ChatMessage, on server: IRCServer, nodeID: UUID) {
+    private func notify(_ title: String, about message: ChatMessage, on server: IRCServer, itemID: UUID) {
         guard Date().timeIntervalSince(message.time) < 60 else { return }
-        if isOnScreen(nodeID) { return }
+        if isOnScreen(itemID) { return }
         let sender = message.senderNick ?? "Someone"
         notificationService.post(
             title: title,
             subtitle: server.name,
             body: message.isAction ? "* \(sender) \(message.text)" : message.text,
-            nodeID: nodeID
+            itemID: itemID
         )
     }
 
@@ -194,8 +194,8 @@ final class ChatStore {
     /// Shows the private conversation with `nick`, starting one if there isn't any.
     func openPrivateConversation(with nick: String, on server: IRCServer) {
         if let ownNick = server.currentNick, IRCName.equal(nick, ownNick) { return }
-        let pm = server.getOrCreatePrivateMessage(with: nick)
-        select(SidebarItem(server: server, kind: .privateMessage(pm)))
+        let pm = server.getOrCreatePrivateConversation(with: nick)
+        select(SidebarItem(server: server, kind: .privateConversation(pm)))
     }
 
     /// Leaves a channel and closes it. One we're no longer in (kicked, or disconnected) just
@@ -216,10 +216,10 @@ final class ChatStore {
         connectionService.sendTopicChange(topic, for: channel.name, on: server)
     }
 
-    func closePrivateMessage(_ pm: IRCPrivateMessage, from server: IRCServer) {
+    func closePrivateConversation(_ pm: IRCPrivateConversation, from server: IRCServer) {
         connectionService.cancelQueuedLines(to: pm.id)
         discardThumbnails(for: pm.log)
-        server.privateMessages.removeAll { $0.id == pm.id }
+        server.privateConversations.removeAll { $0.id == pm.id }
         server.log.append(ChatMessage(time: Date(), text: "Closed conversation with \(pm.nickname)"))
         noteLogsChanged()
         selectServerIfSelectionIsGone(server)
@@ -237,7 +237,7 @@ final class ChatStore {
         switch conversation.kind {
         case .server: preconditionFailure("A server isn't a conversation")
         case .channel(let channel): partChannel(channel)
-        case .privateMessage(let pm): closePrivateMessage(pm, from: conversation.server)
+        case .privateConversation(let pm): closePrivateConversation(pm, from: conversation.server)
         }
     }
 
@@ -252,7 +252,7 @@ final class ChatStore {
 
     /// After one of `server`'s conversations closes: if it was on screen, show the server.
     private func selectServerIfSelectionIsGone(_ server: IRCServer) {
-        if selectedItem == nil { selectedNodeID = server.id }
+        if selectedItem == nil { selectedItemID = server.id }
     }
     
     // MARK: - Server CRUD
@@ -261,7 +261,7 @@ final class ChatStore {
         let server = IRCServer(name: name, host: host, port: port, password: password, useTLS: useTLS, useSASL: useSASL, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname)
         try! syncKeychain(password: password, for: server.id)
         servers.append(server)
-        selectedNodeID = server.id
+        selectedItemID = server.id
     }
     
     func updateServer(id: UUID, name: String, host: String, port: Int, password: String?, useTLS: Bool, useSASL: Bool = false, autoConnectOnLaunch: Bool, nickname: String? = nil) {
@@ -294,8 +294,8 @@ final class ChatStore {
         // Every log this server owned is going away; release their thumbnail state.
         discardThumbnails(for: server.log)
         for channel in server.channels { discardThumbnails(for: channel.log) }
-        for pm in server.privateMessages { discardThumbnails(for: pm.log) }
-        if selectedItem == nil { selectedNodeID = servers.first?.id }
+        for pm in server.privateConversations { discardThumbnails(for: pm.log) }
+        if selectedItem == nil { selectedItemID = servers.first?.id }
     }
     
     func server(withID id: UUID?) -> IRCServer? {
@@ -308,7 +308,7 @@ final class ChatStore {
         servers.flatMap { s in
             [SidebarItem(server: s, kind: .server)] +
             s.channels.map { SidebarItem(server: s, kind: .channel($0)) } +
-            s.privateMessages.map { SidebarItem(server: s, kind: .privateMessage($0)) }
+            s.privateConversations.map { SidebarItem(server: s, kind: .privateConversation($0)) }
         }
     }
 
@@ -319,15 +319,15 @@ final class ChatStore {
     }
 
     /// The selected sidebar row, unless what it showed has gone away.
-    var selectedItem: SidebarItem? { sidebarItem(withID: selectedNodeID) }
+    var selectedItem: SidebarItem? { sidebarItem(withID: selectedItemID) }
 
     /// The sidebar row of the channel or private conversation called `name` on `server`.
     private func conversation(named name: String, on server: IRCServer) -> SidebarItem? {
         if let channel = server.channel(named: name) {
             return SidebarItem(server: server, kind: .channel(channel))
         }
-        if let pm = server.privateMessage(with: name) {
-            return SidebarItem(server: server, kind: .privateMessage(pm))
+        if let pm = server.privateConversation(with: name) {
+            return SidebarItem(server: server, kind: .privateConversation(pm))
         }
         return nil
     }
@@ -335,12 +335,12 @@ final class ChatStore {
     /// Selects a sidebar row. Entering a conversation counts as reading it, so its
     /// unread badge clears.
     func select(_ item: SidebarItem) {
-        selectedNodeID = item.id
+        selectedItemID = item.id
         switch item.kind {
         case .channel(let channel):
             channel.unreadCount = 0
             channel.mentionCount = 0
-        case .privateMessage(let pm): pm.unreadCount = 0
+        case .privateConversation(let pm): pm.unreadCount = 0
         case .server: break
         }
     }
@@ -359,7 +359,7 @@ final class ChatStore {
             return []
         case .channel(let channel):
             return NickCompletion.candidates(members: channel.users, log: channel.log, ownNick: selection.server.currentNick)
-        case .privateMessage(let pm):
+        case .privateConversation(let pm):
             return [pm.nickname]
         }
     }
@@ -373,9 +373,9 @@ final class ChatStore {
     func navigateSidebar(by offset: Int) {
         let all = sidebarItems
         guard !all.isEmpty else { return }
-        guard let currentID = selectedNodeID,
+        guard let currentID = selectedItemID,
               let currentIndex = all.firstIndex(where: { $0.id == currentID }) else {
-            selectedNodeID = all.first?.id
+            selectedItemID = all.first?.id
             return
         }
         select(all[(currentIndex + offset + all.count) % all.count])
@@ -396,7 +396,7 @@ final class ChatStore {
     /// Enforces the maxLogLines preference on every log array (server, channel, PM) and
     /// releases thumbnail state for the dropped messages. Without this, logs and thumbnails
     /// grew without bound for the lifetime of the process — only the *display* was capped.
-    /// Cheap when nothing overflowed (one count check per node), so it runs on every log
+    /// Cheap when nothing overflowed (one count check per log), so it runs on every log
     /// mutation via noteLogsChanged().
     func trimLogs() {
         let cap = max(1, preferences?.maxLogLines ?? AppPreferences.defaultMaxLogLines)
@@ -411,7 +411,7 @@ final class ChatStore {
         for server in servers {
             apply(server.log) { server.log = $0 }
             for channel in server.channels { apply(channel.log) { channel.log = $0 } }
-            for pm in server.privateMessages { apply(pm.log) { pm.log = $0 } }
+            for pm in server.privateConversations { apply(pm.log) { pm.log = $0 } }
         }
     }
 
@@ -429,7 +429,7 @@ final class ChatStore {
         switch item.kind {
         case .server: item.server.log.append(message)
         case .channel(let channel): channel.log.append(message)
-        case .privateMessage(let pm): pm.log.append(message)
+        case .privateConversation(let pm): pm.log.append(message)
         }
         noteLogsChanged()
     }
@@ -482,7 +482,7 @@ final class ChatStore {
             return server
         }
         servers = loaded
-        selectedNodeID = servers.first?.id
+        selectedItemID = servers.first?.id
         // After a migration, make sure the legacy plaintext password is dropped from UserDefaults.
         // Assigning `servers` already triggers didSet -> persistServers() (and encode(to:) omits the
         // password), so this is belt-and-suspenders that also states the migration intent explicitly.
@@ -544,7 +544,7 @@ final class ChatStore {
 
     /// After a wake from sleep or a network outage, reconnects the servers that should be
     /// connected.
-    private func reconnectAfterNetworkChange() {
+    private func reconnectServers() {
         let disconnectedStates: [IRCServer.ConnectionStatus] = [.disconnected, .connectionTimeout]
         for server in servers where server.shouldAutoReconnect && disconnectedStates.contains(server.connectionStatus) {
             connect(server)
@@ -628,7 +628,7 @@ final class ChatStore {
         if let channel, let channelObj = server.channel(named: channel) {
             channelObj.log.append(ChatMessage(time: time, text: "NOTICE\(origin): \(text)"))
             if !isOnScreen(channelObj.id) { channelObj.unreadCount += 1 }
-        } else if let sender, let pm = server.privateMessage(with: sender) {
+        } else if let sender, let pm = server.privateConversation(with: sender) {
             pm.log.append(ChatMessage(time: time, text: "NOTICE\(origin): \(text)"))
             if !isOnScreen(pm.id) { pm.unreadCount += 1 }
         } else {
@@ -662,7 +662,7 @@ final class ChatStore {
         noteLogsChanged()
     }
 
-    private func receive(_ message: ChatMessage, for target: MessageTargetType, on server: IRCServer) {
+    private func receive(_ message: ChatMessage, for target: IncomingTarget, on server: IRCServer) {
         switch target {
         case .server:
             server.log.append(message)
@@ -676,7 +676,7 @@ final class ChatStore {
             channel.log.append(message)
             scanMessageForThumbnails(message)
             if message.isHighlight {
-                notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message, on: server, nodeID: channel.id)
+                notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message, on: server, itemID: channel.id)
             }
 
             if !message.isFromMe, !isOnScreen(channel.id) {
@@ -684,13 +684,13 @@ final class ChatStore {
                 if message.isHighlight { channel.mentionCount += 1 }
             }
 
-        case .privateMessage(let peer):
-            let pm = server.getOrCreatePrivateMessage(with: peer)
+        case .privateConversation(let peer):
+            let pm = server.getOrCreatePrivateConversation(with: peer)
             pm.log.append(message)
             scanMessageForThumbnails(message)
             // A private message is meant for us, so every one is worth a notification.
             if !message.isFromMe {
-                notify("Message from \(peer)", about: message, on: server, nodeID: pm.id)
+                notify("Message from \(peer)", about: message, on: server, itemID: pm.id)
             }
 
             if !message.isFromMe, !isOnScreen(pm.id) {
@@ -778,7 +778,7 @@ final class ChatStore {
         }
 
         // Update nick in PM conversations so messages go to the right target
-        if let pm = server.privateMessage(with: oldNick) {
+        if let pm = server.privateConversation(with: oldNick) {
             pm.nickname = newNick
             pm.log.append(nickMessage)
         }
@@ -803,7 +803,7 @@ final class ChatStore {
         }
 
         // Log quit in PM conversation so the user knows their DM partner left
-        if let pm = server.privateMessage(with: nick) {
+        if let pm = server.privateConversation(with: nick) {
             pm.log.append(logMessage)
             logs += 1
         }

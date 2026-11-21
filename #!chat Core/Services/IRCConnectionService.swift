@@ -12,7 +12,7 @@ final class IRCConnectionService {
         /// a failure to send.
         case logAppended(ChatMessage)
         /// A line arrived for the server log, a channel, or a private conversation.
-        case messageReceived(ChatMessage, MessageTargetType)
+        case messageReceived(ChatMessage, IncomingTarget)
         /// A NOTICE from `sender` (nil when the server sent it without a source), to us or,
         /// with `channel`, to a channel.
         case notice(sender: String?, channel: String?, text: String, time: Date?)
@@ -51,9 +51,10 @@ final class IRCConnectionService {
 
     /// Receives every event, in order, with the server it concerns.
     var onEvent: (Event, IRCServer) -> Void = { _, _ in }
-    /// Called after a wake from sleep, or when the network returns after an outage: the time
-    /// to reconnect servers that should be connected.
-    var onNetworkAvailable: () -> Void = {}
+    /// Called when the connections that were closed can come back: after a wake from sleep, or
+    /// when the network returns after an outage. The time to reconnect servers that should be
+    /// connected.
+    var onCanReconnect: () -> Void = {}
 
     // Clients and connection state
     private(set) var clients: [UUID: IRCClient] = [:]
@@ -149,7 +150,7 @@ final class IRCConnectionService {
     }
 
     /// Drops every connection, and any retry waiting to happen, until the Mac wakes or the
-    /// network returns; `onNetworkAvailable` then brings back the servers that should be
+    /// network returns; `onCanReconnect` then brings back the servers that should be
     /// connected.
     private func suspendConnections(reason: String) {
         for serverID in Set(clients.keys).union(reconnectTasks.keys) {
@@ -203,7 +204,7 @@ final class IRCConnectionService {
 
     private func handleWake() {
         // After waking, reconnect all servers that should auto-reconnect.
-        onNetworkAvailable()
+        onCanReconnect()
     }
 
     // MARK: - Network Monitoring
@@ -234,7 +235,7 @@ final class IRCConnectionService {
     }
 
     private func handleNetworkRestored() {
-        onNetworkAvailable()
+        onCanReconnect()
     }
 
     // MARK: - Connection Management
@@ -464,8 +465,8 @@ final class IRCConnectionService {
             sendMessage(trimmed, to: .channel(channel), from: server)
         } else {
             // Private message - find or create PM conversation
-            let pm = server.getOrCreatePrivateMessage(with: targetName)
-            sendMessage(trimmed, to: .privateMessage(pm), from: server)
+            let pm = server.getOrCreatePrivateConversation(with: targetName)
+            sendMessage(trimmed, to: .privateConversation(pm), from: server)
         }
     }
 
@@ -500,7 +501,7 @@ final class IRCConnectionService {
         let msg = ChatMessage(time: Date(), text: text, senderNick: client.nickname, isPrivmsg: true, isFromMe: true, isAction: isAction)
         switch target {
         case .channel(let channel): channel.log.append(msg)
-        case .privateMessage(let pm): pm.log.append(msg)
+        case .privateConversation(let pm): pm.log.append(msg)
         }
         onEvent(.logAppended(msg), server)
         // A failed write ends the connection, which arrives as a .disconnected event.
@@ -579,7 +580,7 @@ final class IRCConnectionService {
         switch target {
         case .channel(let channel):
             channel.log.append(msg)
-        case .privateMessage(let pm):
+        case .privateConversation(let pm):
             pm.log.append(msg)
         case .none:
             server.log.append(msg)
@@ -647,7 +648,7 @@ final class IRCConnectionService {
                    for: serverID)
 
         case .privateMessage(let peer, let message):
-            report(.messageReceived(chatMessage(message, nickname: client.nickname), .privateMessage(peer)), for: serverID)
+            report(.messageReceived(chatMessage(message, nickname: client.nickname), .privateConversation(peer)), for: serverID)
 
         case .notice(let sender, let channel, let text, let time):
             report(.notice(sender: sender, channel: channel, text: text, time: time), for: serverID)
@@ -720,13 +721,13 @@ final class IRCConnectionService {
 /// A conversation messages can be sent to.
 enum MessageTarget {
     case channel(IRCChannel)
-    case privateMessage(IRCPrivateMessage)
+    case privateConversation(IRCPrivateConversation)
 
     /// The channel or nick the messages are addressed to.
     var name: String {
         switch self {
         case .channel(let channel): channel.name
-        case .privateMessage(let pm): pm.nickname
+        case .privateConversation(let pm): pm.nickname
         }
     }
 
@@ -734,13 +735,15 @@ enum MessageTarget {
     var id: UUID {
         switch self {
         case .channel(let channel): channel.id
-        case .privateMessage(let pm): pm.id
+        case .privateConversation(let pm): pm.id
         }
     }
 }
 
-enum MessageTargetType {
+/// Where a message that arrives goes: the server's log, a channel's, or the private
+/// conversation with a nick.
+enum IncomingTarget {
     case server
     case channel(String)
-    case privateMessage(String)
+    case privateConversation(String)
 }

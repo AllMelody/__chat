@@ -24,7 +24,7 @@ Debug builds keep the sandbox's incoming-connections entitlement, which only the
 ## Notes
 
 - Heavily inspired by [LimeChat](https://github.com/psychs/limechat) by Satoshi Nakagawa.
-- Earlier versions ran on an IRC engine adapted from swift-nio-irc by ZeeZide GmbH. Thanks to its authors; `#!chat/IRC` has since been rewritten from scratch.
+- Earlier versions ran on an IRC engine adapted from swift-nio-irc by ZeeZide GmbH. Thanks to its authors; `#!chat Core/IRC` has since been rewritten from scratch.
 - Almost all of the code was written by Claude by Anthropic.
 
 ## License

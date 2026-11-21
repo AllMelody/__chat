@@ -7,11 +7,11 @@ import UserNotifications
 ///
 /// Threading: create and use on the main thread (owned by ChatStore). Delegate callbacks
 /// from UNUserNotificationCenter are `nonisolated` and hop to the main actor before
-/// touching `onSelectNode`.
+/// touching `onSelectItem`.
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
-    /// Called on the main thread with the node ID (channel/PM) stored in a clicked
+    /// Called on the main thread with the sidebar item ID (channel/PM) stored in a clicked
     /// notification, so the app can bring that conversation on screen.
-    var onSelectNode: ((UUID) -> Void)?
+    var onSelectItem: ((UUID) -> Void)?
 
     private let center = UNUserNotificationCenter.current()
     private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Notifications")
@@ -24,13 +24,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func post(title: String, subtitle: String, body: String, nodeID: UUID) {
+    func post(title: String, subtitle: String, body: String, itemID: UUID) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.subtitle = subtitle
         content.body = body
         content.sound = .default
-        content.userInfo = ["nodeID": nodeID.uuidString]
+        content.userInfo = ["itemID": itemID.uuidString]
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         center.add(request) { error in
             if let error { Self.logger.error("Failed to post notification: \(String(describing: error))") }
@@ -47,11 +47,11 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse) async {
-        guard let idString = response.notification.request.content.userInfo["nodeID"] as? String,
-              let nodeID = UUID(uuidString: idString) else { return }
+        guard let idString = response.notification.request.content.userInfo["itemID"] as? String,
+              let itemID = UUID(uuidString: idString) else { return }
         await MainActor.run {
             NSApp.activate()
-            onSelectNode?(nodeID)
+            onSelectItem?(itemID)
         }
     }
 }

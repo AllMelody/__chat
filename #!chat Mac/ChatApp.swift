@@ -5,54 +5,54 @@ import SwiftUI
 struct ChatApp: App {
     // @State guarantees a single instance of each for the app's lifetime.
     @State private var preferences: AppPreferences
-    @State private var model: ChatStore
+    @State private var store: ChatStore
 
     init() {
         let preferences = AppPreferences()
-        let model = ChatStore()
+        let store = ChatStore()
         // ChatStore holds preferences weakly; @State keeps them alive.
-        model.preferences = preferences
+        store.preferences = preferences
         _preferences = State(initialValue: preferences)
-        _model = State(initialValue: model)
+        _store = State(initialValue: store)
     }
 
     var body: some Scene {
         // One window: the selection and sheets live in the shared ChatStore, so a second window
         // would only mirror the first.
         Window("#!chat", id: "main") { ContentView() }
-            .environment(model)
+            .environment(store)
             .environment(preferences)
             .commands {
                 CloseCommands()
                 FindCommands()
 
                 CommandMenu("Server") {
-                    Button("Add Server…") { model.isPresentingAddServer = true }
+                    Button("Add Server…") { store.isPresentingAddServer = true }
                         .keyboardShortcut("n", modifiers: [.command, .shift])
 
                     Divider()
 
                     // These act on the server of whatever is selected: the server itself, or
                     // the one a selected conversation is on.
-                    let server = model.selectedItem?.server
+                    let server = store.selectedItem?.server
                     switch server?.connectionStatus {
                     case .connected:
-                        Button("Disconnect") { if let server { model.disconnect(server) } }
+                        Button("Disconnect") { if let server { store.disconnect(server) } }
                     case .connecting, .reconnecting:
-                        Button("Cancel Connection") { if let server { model.disconnect(server) } }
+                        Button("Cancel Connection") { if let server { store.disconnect(server) } }
                     case .disconnected, .connectionTimeout, nil:
-                        Button("Connect") { if let server { model.connect(server) } }
+                        Button("Connect") { if let server { store.connect(server) } }
                             .disabled(server == nil)
                     }
                     Button("Join Channel…") {
-                        model.pendingJoinServerID = server?.id
-                        model.isPresentingJoinChannel = true
+                        store.pendingJoinServerID = server?.id
+                        store.isPresentingJoinChannel = true
                     }
                     .keyboardShortcut("j")
                     .disabled(server?.isConnected != true)
                     Button("Edit Server…") {
-                        model.pendingEditServerID = server?.id
-                        model.isPresentingEditServer = true
+                        store.pendingEditServerID = server?.id
+                        store.isPresentingEditServer = true
                     }
                     .disabled(server == nil)
 
@@ -62,33 +62,33 @@ struct ChatApp: App {
                     // win over the composer, where ⌘⌫ has to keep deleting to the start of the
                     // line.
                     Button("Delete Server…") {
-                        if let server = model.server(withID: model.selectedNodeID) {
-                            model.requestDeletion(of: server)
+                        if let server = store.server(withID: store.selectedItemID) {
+                            store.requestDeletion(of: server)
                         }
                     }
-                    .disabled(model.server(withID: model.selectedNodeID) == nil)
+                    .disabled(store.server(withID: store.selectedItemID) == nil)
                 }
                 
                 CommandMenu("Channel") {
                     Button("Show Topic…") {
-                        model.isPresentingTopicEditor = true
+                        store.isPresentingTopicEditor = true
                     }
                     .keyboardShortcut("t", modifiers: [.command])
-                    .disabled(model.selectedItem?.channel == nil)
+                    .disabled(store.selectedItem?.channel == nil)
                 }
 
                 CommandMenu("Navigation") {
-                    Button("Previous Item") { model.navigateSidebar(by: -1) }
+                    Button("Previous Item") { store.navigateSidebar(by: -1) }
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
-                    Button("Next Item") { model.navigateSidebar(by: 1) }
+                    Button("Next Item") { store.navigateSidebar(by: 1) }
                         .keyboardShortcut(.downArrow, modifiers: [.command])
                 }
             }
         Settings {
-            PreferencesView()
+            SettingsView()
                 .environment(preferences)
-                .environment(model)
+                .environment(store)
         }
     }
 }
@@ -98,19 +98,19 @@ struct ChatApp: App {
 /// focused view, which is nearly always the composer.)
 struct FindCommands: Commands {
     /// Set only while the main window is key.
-    @FocusedValue(ChatStore.self) private var model
+    @FocusedValue(ChatStore.self) private var store
 
     var body: some Commands {
         CommandGroup(replacing: .textEditing) {
-            Button("Find…") { model?.find(.showFindInterface) }
+            Button("Find…") { store?.find(.showFindInterface) }
                 .keyboardShortcut("f")
-                .disabled(model == nil)
-            Button("Find Next") { model?.find(.nextMatch) }
+                .disabled(store == nil)
+            Button("Find Next") { store?.find(.nextMatch) }
                 .keyboardShortcut("g")
-                .disabled(model == nil)
-            Button("Find Previous") { model?.find(.previousMatch) }
+                .disabled(store == nil)
+            Button("Find Previous") { store?.find(.previousMatch) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(model == nil)
+                .disabled(store == nil)
         }
     }
 }
@@ -120,14 +120,14 @@ struct FindCommands: Commands {
 /// windows, like Settings, still close with it.
 struct CloseCommands: Commands {
     /// Set only while the main window is key.
-    @FocusedValue(ChatStore.self) private var model
+    @FocusedValue(ChatStore.self) private var store
 
     var body: some Commands {
         CommandGroup(replacing: .saveItem) {
-            if let model {
-                let selection = model.selectedItem
+            if let store {
+                let selection = store.selectedItem
                 Button(selection?.channel != nil ? "Part Channel…" : "Close Conversation…") {
-                    if let selection { model.requestClosing(selection) }
+                    if let selection { store.requestClosing(selection) }
                 }
                 .keyboardShortcut("w")
                 .disabled(selection?.isConversation != true)
