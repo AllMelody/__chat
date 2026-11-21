@@ -8,8 +8,24 @@ struct SidebarView: View {
         List(selection: selection) {
             ForEach(store.servers) { server in
                 Section {
-                    ServerRow(server: server)
-                        .tag(server.id)
+                    if server.connectionStatus == .disconnected || server.connectionStatus == .connectionTimeout {
+                        // A tap shows what can be done, Connect first, rather than an empty log.
+                        Menu { ServerActions(server: server, offersLog: true) } label: { ServerRow(server: server) }
+                            .tint(.primary)   // the name as in any row, not in the accent color
+                    } else {
+                        ServerRow(server: server)
+                            .tag(server.id)
+                            .contextMenu { ServerActions(server: server) }
+                            // Swiping disconnects, as it trashes a mail: all the way across does it
+                            // at once. Red but not destructive, which would take the row away as if
+                            // deleted; disconnecting keeps it.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(server.isConnected ? "Disconnect" : "Cancel", systemImage: "bolt.horizontal.circle") {
+                                    store.disconnect(server)
+                                }
+                                .tint(.red)
+                            }
+                    }
                     ForEach(server.channels) { channel in
                         ConversationRow(item: SidebarItem(server: server, kind: .channel(channel)),
                                         unreadCount: channel.unreadCount,
@@ -63,6 +79,7 @@ struct SidebarView: View {
     }
 }
 
+/// A server's row: its name, and its state in the icon's color and a spinner while connecting.
 private struct ServerRow: View {
     let server: IRCServer
 
@@ -80,7 +97,8 @@ private struct ServerRow: View {
             Image(systemName: SidebarItem(server: server, kind: .server).systemImageName)
                 .foregroundStyle(server.connectionStatus.color)
         }
-        .contextMenu { ServerActions(server: server) }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)   // the whole row takes the tap
     }
 }
 
@@ -126,6 +144,9 @@ private struct ConversationRow: View {
 struct ServerActions: View {
     @Environment(ChatStore.self) private var store
     let server: IRCServer
+    /// For the list's menu of a disconnected server, whose row doesn't open its log: a way in
+    /// anyway, to read why it isn't connected.
+    var offersLog = false
 
     var body: some View {
         switch server.connectionStatus {
@@ -139,6 +160,9 @@ struct ServerActions: View {
             Button("Cancel Connection", systemImage: "xmark.circle") { store.disconnect(server) }
         case .disconnected, .connectionTimeout:
             Button("Connect", systemImage: "bolt.horizontal") { store.connect(server) }
+        }
+        if offersLog {
+            Button("Show Log", systemImage: "doc.plaintext") { store.select(SidebarItem(server: server, kind: .server)) }
         }
         Divider()
         Button("Edit Server…", systemImage: "pencil") {
