@@ -4,6 +4,8 @@ import SwiftUI
 /// most iPhones and in most orientations, one at a time.
 struct ContentView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     /// What's typed and not sent yet. One for the app, as on the Mac: it stays while the user
     /// looks at another conversation.
     @State private var draft = ""
@@ -14,15 +16,21 @@ struct ContentView: View {
     var body: some View {
         @Bindable var store = store
         let closing = store.sidebarItem(withID: store.pendingCloseConversationID)
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(isPresentingSettings: $isPresentingSettings)
         } detail: {
-            if let item = store.selectedItem {
-                ConversationView(item: item, draft: $draft)
-                    .id(item.id)
-            } else {
-                ContentUnavailableView("No Conversation Selected", systemImage: "bubble.left.and.bubble.right")
+            Group {
+                if let item = store.selectedItem {
+                    ConversationView(item: item, draft: $draft)
+                        .id(item.id)
+                } else {
+                    ContentUnavailableView("No Conversation Selected", systemImage: "bubble.left.and.bubble.right")
+                }
             }
+            // Only side by side: one at a time, the edge swipe already goes back to the list.
+            .modifier(SidebarEdgeSwipe(isEnabled: horizontalSizeClass == .regular) {
+                withAnimation { columnVisibility = .all }
+            })
         }
         .sheet(isPresented: $store.isPresentingAddServer) { ServerFormView() }
         .sheet(isPresented: $store.isPresentingEditServer) {
@@ -86,5 +94,29 @@ struct ContentView: View {
         channelsToJoin = ""
         guard !channels.isEmpty, let server = store.server(withID: store.pendingJoinServerID) else { return }
         store.joinChannels(channels, on: server)
+    }
+}
+
+/// A swipe in from the left edge shows the sidebar where the split view has hidden it, in a
+/// window too narrow for both side by side.
+///
+/// A deliberate exception to iOS conventions, which the rest of the app follows: the system's
+/// split view, like Mail's, only opens a hidden sidebar from its toolbar button. Only a mostly
+/// sideways drag that starts at the edge counts, so scrolling and selecting text in the log go
+/// on as before.
+private struct SidebarEdgeSwipe: ViewModifier {
+    let isEnabled: Bool
+    let showSidebar: () -> Void
+
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onChanged { drag in
+                    guard drag.startLocation.x < 24, drag.translation.width > 50,
+                          abs(drag.translation.height) < drag.translation.width else { return }
+                    showSidebar()
+                },
+            isEnabled: isEnabled
+        )
     }
 }
