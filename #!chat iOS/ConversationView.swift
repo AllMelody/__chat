@@ -201,6 +201,7 @@ private struct MessageRow: View {
             }
         }
         var body = AttributedString(message.text)
+        if message.isReply { body.foregroundColor = .secondary }
         for link in Formatting.webLinks(in: message.text) {
             let range = Range(link.range, in: message.text)!
             body[Range(range, in: body)!].link = link.url

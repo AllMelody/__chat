@@ -17,8 +17,11 @@ struct ChatMessage: Identifiable, Equatable {
     /// For a channel message sent only to members with some status, the target it was sent
     /// to, like `@#chan` for operators only.
     let statusTarget: String?
+    /// The server's reply to a command, ours or another client's: shown less prominently than
+    /// what people say.
+    let isReply: Bool
 
-    init(time: Date, text: String, senderNick: String? = nil, isPrivmsg: Bool = false, isFromMe: Bool = false, isHighlight: Bool = false, isAction: Bool = false, statusTarget: String? = nil) {
+    init(time: Date, text: String, senderNick: String? = nil, isPrivmsg: Bool = false, isFromMe: Bool = false, isHighlight: Bool = false, isAction: Bool = false, statusTarget: String? = nil, isReply: Bool = false) {
         self.time = time
         self.text = text
         self.senderNick = senderNick
@@ -27,6 +30,7 @@ struct ChatMessage: Identifiable, Equatable {
         self.isHighlight = isHighlight
         self.isAction = isAction
         self.statusTarget = statusTarget
+        self.isReply = isReply
     }
 }
 

@@ -349,8 +349,9 @@ struct LogTextView: NSViewRepresentable {
                 combined.append(NSAttributedString(string: ": ", attributes: Self.grayAttributes))
             }
         }
-        // Chat body or non-chat line: label color, with links detected
-        combined.append(Self.linkified(msg.text, attributes: attrs))
+        // Chat body or non-chat line: label color, with links detected. A server's reply is
+        // secondary, like the time.
+        combined.append(Self.linkified(msg.text, attributes: msg.isReply ? Self.grayAttributes : attrs))
 
         // Marker consumed by LogLayoutManager, which paints the wash edge to edge across
         // the text view (.backgroundColor would only paint behind the glyphs). Applied

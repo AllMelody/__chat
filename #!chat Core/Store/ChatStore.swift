@@ -52,6 +52,8 @@ final class ChatStore {
     @ObservationIgnored private var preferencesMirrorTask: Task<Void, Never>?
     @ObservationIgnored private var badgeTask: Task<Void, Never>?
     @ObservationIgnored private var applicationObservers: [any NSObjectProtocol] = []
+    /// For each server, whether its replies answer what the user sent from here.
+    @ObservationIgnored private var answerWindows: [UUID: AnswerWindow] = [:]
     
     init() {
         setupServices()
@@ -434,8 +436,8 @@ final class ChatStore {
     }
 
     /// Adds a status line to the log a sidebar row shows.
-    private func log(_ text: String, in item: SidebarItem) {
-        let message = ChatMessage(time: Date(), text: text)
+    private func log(_ text: String, in item: SidebarItem, isReply: Bool = false) {
+        let message = ChatMessage(time: Date(), text: text, isReply: isReply)
         switch item.kind {
         case .server: item.server.log.append(message)
         case .channel(let channel): channel.log.append(message)
@@ -620,13 +622,15 @@ final class ChatStore {
         log("⚠️ " + (subject.map { "\($0): " } ?? "") + text, in: whereToShow(somethingAbout: subject, on: server))
     }
 
-    /// Shows a reply that answers a command, such as a line of WHOIS, where the user will see
-    /// it. The server's greeting, which nobody asked for, goes to the server log.
+    /// Shows a reply that answers what the user sent, such as a line of WHOIS, where they'll
+    /// see it. Replies nobody here asked for go to the server log: the server's greeting, and
+    /// answers to other clients on the same bouncer connection (see AnswerWindow).
     private func showReply(_ arguments: [String], isGreeting: Bool, on server: IRCServer) {
-        let destination = isGreeting
-            ? SidebarItem(server: server, kind: .server)
-            : whereToShow(somethingAbout: arguments.first, on: server)
-        log(arguments.joined(separator: " "), in: destination)
+        let answersUser = !isGreeting && answerWindows[server.id, default: AnswerWindow()].isAnswer()
+        let destination = answersUser
+            ? whereToShow(somethingAbout: arguments.first, on: server)
+            : SidebarItem(server: server, kind: .server)
+        log(arguments.joined(separator: " "), in: destination, isReply: true)
     }
 
     /// Files a NOTICE where it belongs: with its channel, or in the private conversation
@@ -833,7 +837,16 @@ extension ChatStore {
         let client = connectionService.isRegistered(server.id) ? connectionService.clients[server.id] : nil
         func feedback(_ text: String) { log(text, in: selection) }
 
-        switch MessageRouter.parse(text) {
+        let input = MessageRouter.parse(text)
+        // The server may answer a command, or a line to someone who's away; what's said in a
+        // channel it doesn't answer, so chatting there doesn't keep the window open.
+        let isChannelTalk = switch input {
+        case .text, .me: selection.channel != nil
+        default: false
+        }
+        if !isChannelTalk { answerWindows[server.id, default: AnswerWindow()].userSent() }
+
+        switch input {
         case .text(let body):
             guard !body.isEmpty else { return true }
             return send(body, to: selection)
