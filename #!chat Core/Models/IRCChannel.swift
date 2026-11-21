@@ -25,6 +25,19 @@ final class IRCChannel: Identifiable {
 
     init(name: String) { self.name = name }
 
+    /// Counts a line that has just arrived as unread, unless the user saw it arrive. A line of
+    /// our own, said from another client or played back by a bouncer, means we were reading
+    /// the channel when we said it: everything before it is read.
+    func countUnread(_ message: ChatMessage, isOnScreen: Bool) {
+        if message.isFromMe {
+            unreadCount = 0
+            mentionCount = 0
+        } else if !isOnScreen {
+            unreadCount += 1
+            if message.isHighlight { mentionCount += 1 }
+        }
+    }
+
     // MARK: - User Management Helpers
     // Nicks are compared the way the server compares them (IRCName.equal).
 
@@ -85,4 +98,13 @@ final class IRCPrivateConversation: Identifiable {
     var unreadCount: Int = 0
 
     init(nickname: String) { self.nickname = nickname }
+
+    /// Counts a line that has just arrived as unread, as IRCChannel.countUnread does.
+    func countUnread(_ message: ChatMessage, isOnScreen: Bool) {
+        if message.isFromMe {
+            unreadCount = 0
+        } else if !isOnScreen {
+            unreadCount += 1
+        }
+    }
 }

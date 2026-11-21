@@ -678,9 +678,9 @@ final class ChatStore {
             server.log.append(message)
 
         // Nothing to de-duplicate: lines this client sends never come back from the server
-        // (see IRCConnectionService.sendSingleLine); isFromMe ones were sent from elsewhere.
-        // Either way, our own lines never count as unread, and nor does anything that
-        // arrives in front of the user.
+        // (see IRCConnectionService.sendSingleLine); isFromMe ones were sent from elsewhere,
+        // and mark what came before them read (countUnread). Nothing that arrives in front of
+        // the user counts as unread.
         case .channel(let name):
             let channel = server.getOrCreateChannel(named: name)
             channel.log.append(message)
@@ -689,10 +689,7 @@ final class ChatStore {
                 notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message, on: server, itemID: channel.id)
             }
 
-            if !message.isFromMe, !isOnScreen(channel.id) {
-                channel.unreadCount += 1
-                if message.isHighlight { channel.mentionCount += 1 }
-            }
+            channel.countUnread(message, isOnScreen: isOnScreen(channel.id))
 
         case .privateConversation(let peer):
             let pm = server.getOrCreatePrivateConversation(with: peer)
@@ -703,9 +700,7 @@ final class ChatStore {
                 notify("Message from \(peer)", about: message, on: server, itemID: pm.id)
             }
 
-            if !message.isFromMe, !isOnScreen(pm.id) {
-                pm.unreadCount += 1
-            }
+            pm.countUnread(message, isOnScreen: isOnScreen(pm.id))
         }
         noteLogsChanged()
     }

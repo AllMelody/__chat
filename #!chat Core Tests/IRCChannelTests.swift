@@ -21,4 +21,45 @@ struct IRCChannelTests {
         channel.removeAllUsers()
         #expect(channel.users.isEmpty)
     }
+
+    private func line(_ text: String, fromMe: Bool = false, mentionsMe: Bool = false) -> ChatMessage {
+        ChatMessage(time: .now, text: text, senderNick: fromMe ? "me" : "bob", isPrivmsg: true, isFromMe: fromMe, isHighlight: mentionsMe)
+    }
+
+    @Test func `What others say counts as unread, and mentions of us as mentions`() {
+        let channel = IRCChannel(name: "#swift")
+        channel.countUnread(line("hi"), isOnScreen: false)
+        channel.countUnread(line("me: you there?", mentionsMe: true), isOnScreen: false)
+        #expect(channel.unreadCount == 2)
+        #expect(channel.mentionCount == 1)
+    }
+
+    @Test func `What arrives in front of the user is read already`() {
+        let channel = IRCChannel(name: "#swift")
+        channel.countUnread(line("me: look", mentionsMe: true), isOnScreen: true)
+        #expect(channel.unreadCount == 0)
+        #expect(channel.mentionCount == 0)
+    }
+
+    @Test func `A line of our own marks what came before it read, but not what comes after`() {
+        let channel = IRCChannel(name: "#swift")
+        channel.countUnread(line("me: ping", mentionsMe: true), isOnScreen: false)
+        channel.countUnread(line("pong", fromMe: true), isOnScreen: false)   // said from another client
+        #expect(channel.unreadCount == 0)
+        #expect(channel.mentionCount == 0)
+
+        channel.countUnread(line("me: thanks", mentionsMe: true), isOnScreen: false)
+        #expect(channel.unreadCount == 1)
+        #expect(channel.mentionCount == 1)
+    }
+
+    @Test func `In a private conversation too`() {
+        let pm = IRCPrivateConversation(nickname: "bob")
+        pm.countUnread(line("hey"), isOnScreen: false)
+        pm.countUnread(line("hey"), isOnScreen: false)
+        pm.countUnread(line("hi!", fromMe: true), isOnScreen: false)
+        #expect(pm.unreadCount == 0)
+        pm.countUnread(line("how are you?"), isOnScreen: false)
+        #expect(pm.unreadCount == 1)
+    }
 }
