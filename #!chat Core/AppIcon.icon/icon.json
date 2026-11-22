@@ -1,67 +1,57 @@
 {
-  "fill": {
-    "linear-gradient": [
+  "fill" : {
+    "linear-gradient" : [
       "display-p3:0.69000,0.85500,0.51000,1.00000",
       "display-p3:0.45500,0.71000,0.29000,1.00000"
-    ],
-    "orientation": {
-      "start": {
-        "x": 0.5,
-        "y": 0.0
-      },
-      "stop": {
-        "x": 0.5,
-        "y": 1.0
-      }
-    }
+    ]
   },
-  "groups": [
+  "groups" : [
     {
-      "layers": [
+      "layers" : [
         {
-          "image-name": "Lime.svg",
-          "name": "Lime",
-          "glass": false
+          "glass" : false,
+          "image-name" : "Lime.svg",
+          "name" : "Lime"
         }
       ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0
       },
-      "translucency": {
-        "enabled": false,
-        "value": 0
-      },
-      "specular": false
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
     },
     {
-      "layers": [
+      "layers" : [
         {
-          "image-name": "Dot.svg",
-          "name": "Dot",
-          "glass": true
+          "glass" : true,
+          "image-name" : "Dot.svg",
+          "name" : "Dot"
         },
         {
-          "image-name": "Bar.svg",
-          "name": "Bar",
-          "glass": true
+          "glass" : true,
+          "image-name" : "Bar.svg",
+          "name" : "Bar"
         }
       ],
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0.5
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
       },
-      "translucency": {
-        "enabled": true,
-        "value": 0.35
-      },
-      "specular": true
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.35
+      }
     }
   ],
-  "supported-platforms": {
-    "circles": [
+  "supported-platforms" : {
+    "circles" : [
       "watchOS"
     ],
-    "squares": "shared"
+    "squares" : "shared"
   }
 }
