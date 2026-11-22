@@ -93,6 +93,13 @@ struct ContentView: View {
             Divider()
             ComposerTextField(text: $draft, placeholder: "Type a message…", focusRequest: composerFocusRequest,
                               completions: { store.nickCompletionCandidates }) {
+                // Not sendable yet, with nobody to read it (SidebarItem.canSend): the line stays,
+                // with the beep of a key that can't do anything here, rather than "Not connected."
+                // in the log. An empty line just does nothing, as before.
+                if !draft.isEmpty, let item = store.selectedItem, !item.canSend(draft) {
+                    NSSound.beep()
+                    return false
+                }
                 guard store.handleInputFromComposer(draft) else { return false }
                 draft = ""
                 return true

@@ -63,6 +63,30 @@ struct SidebarItem: Identifiable {
     }
 }
 
+extension SidebarItem {
+    /// Whether `text`, typed here, can go out now. A command always can: some work without a
+    /// connection, and the rest say why not. What people are to read waits until someone can
+    /// read it (`isReadyToChat`), which ChatStore.send would otherwise refuse, in the log.
+    func canSend(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        switch MessageRouter.parse(text) {
+        case .text, .me: return isReadyToChat
+        default: return true
+        }
+    }
+
+    /// The server is connected and, for a channel, we're in it. A server's own log takes only
+    /// commands.
+    var isReadyToChat: Bool {
+        guard server.isConnected else { return false }
+        switch kind {
+        case .channel(let channel): return channel.joined
+        case .privateConversation: return true
+        case .server: return false
+        }
+    }
+}
+
 extension IRCServer.ConnectionStatus {
     /// The color of a server's icon in the sidebar while it's in this state.
     var color: Color {

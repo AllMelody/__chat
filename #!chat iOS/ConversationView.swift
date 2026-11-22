@@ -42,7 +42,7 @@ struct ConversationView: View {
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
-                .disabled(draft.isEmpty)
+                .disabled(!item.canSend(draft))   // off until there's someone to read it
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -51,7 +51,7 @@ struct ConversationView: View {
     private func send() {
         // Return would take the keyboard away, and the next line is often on its way.
         composerIsFocused = true
-        guard store.handleInputFromComposer(draft) else { return }
+        guard item.canSend(draft), store.handleInputFromComposer(draft) else { return }
         draft = ""
         sentCount += 1
     }
