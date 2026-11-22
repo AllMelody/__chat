@@ -208,6 +208,17 @@ final class ChatStore {
         select(SidebarItem(server: server, kind: .privateConversation(pm)))
     }
 
+    /// Asks the server who `nick` is, as /whois does. Asked for, the answer shows where the
+    /// user is looking (AnswerWindow).
+    func whois(_ nick: String, on server: IRCServer) {
+        guard connectionService.isRegistered(server.id), let client = connectionService.clients[server.id] else {
+            log("Not connected.", in: whereToShow(somethingAbout: nil, on: server))
+            return
+        }
+        answerWindows[server.id, default: AnswerWindow()].userSent()
+        client.send(.whois(nick))
+    }
+
     /// Leaves a channel and closes it. One we're no longer in (kicked, or disconnected) just
     /// closes.
     func partChannel(_ channel: IRCChannel) {

@@ -123,6 +123,13 @@ struct ContentView: View {
                         .onTapGesture(count: 2) {
                             if let server = store.selectedItem?.server { store.openPrivateConversation(with: nick, on: server) }
                         }
+                        .contextMenu {
+                            if let server = store.selectedItem?.server {
+                                Button("Private Message") { store.openPrivateConversation(with: nick, on: server) }
+                                    .disabled(server.currentNick.map { IRCName.equal(nick, $0) } ?? false)
+                                Button("Whois") { store.whois(nick, on: server) }
+                            }
+                        }
                 }
             }
             .listStyle(.plain)

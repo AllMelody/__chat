@@ -20,7 +20,7 @@ struct ConversationView: View {
             .toolbar { toolbar }
             .inspector(isPresented: $isShowingMembers) {
                 if let channel = item.channel {
-                    MemberList(channel: channel, server: item.server)
+                    MemberList(channel: channel, server: item.server) { isShowingMembers = false }
                 }
             }
     }
@@ -99,6 +99,8 @@ private struct MemberList: View {
     @Environment(ChatStore.self) private var store
     let channel: IRCChannel
     let server: IRCServer
+    /// Puts the list away, for the log to show the answer to a Whois.
+    let close: () -> Void
 
     var body: some View {
         List {
@@ -106,6 +108,14 @@ private struct MemberList: View {
                 ForEach(channel.users, id: \.self) { nick in
                     Button(nick) { store.openPrivateConversation(with: nick, on: server) }
                         .foregroundStyle(.primary)
+                        .contextMenu {
+                            Button("Private Message", systemImage: "bubble.left") { store.openPrivateConversation(with: nick, on: server) }
+                                .disabled(server.currentNick.map { IRCName.equal(nick, $0) } ?? false)
+                            Button("Whois", systemImage: "info.circle") {
+                                store.whois(nick, on: server)
+                                close()
+                            }
+                        }
                 }
             }
         }
