@@ -125,20 +125,22 @@ private struct MemberList: View {
 
 // MARK: - Log
 
-/// The log, one row a line. It follows the newest line, as lines arrive and as the keyboard
-/// comes and goes, until the user scrolls away from it; scrolling back to it follows again.
+/// The log, one row a line. It opens at its newest line and stays there, as lines arrive and as
+/// the keyboard comes and goes, until the user scrolls away from it.
 ///
-/// The rows are laid out lazily, so the scroll view only estimates the height of those it
-/// hasn't shown, and its bottom edge is a guess: scrolling there can land past the last line,
-/// on nothing. Scrolling to the last line itself is exact, so that's what it does.
+/// Staying there is the scroll view's own doing, by its bottom anchor. Following the newest row
+/// by its id instead goes wrong: where a scroll view puts a row it's keeping in view, once the
+/// keyboard has gone or the bars have come in around a log just opened, is past the end by the
+/// height of the composer.
 private struct LogView: View {
     let messages: [ChatMessage]
     let thumbnails: [UUID: [MessageThumbnail]]
     /// Bumped each time the user sends something: the log goes back to its newest line, as
-    /// Messages does, and follows from there.
+    /// Messages does.
     let sentCount: Int
-    @State private var position = ScrollPosition(idType: UUID.self)
-    @State private var following = LogFollowing()
+    @State private var position = ScrollPosition(edge: .bottom)
+    /// The width the log is laid out at: the room it has, a moment late.
+    @State private var width: CGFloat?
 
     var body: some View {
         ScrollView {
@@ -147,52 +149,24 @@ private struct LogView: View {
                     MessageRow(message: message, thumbnails: thumbnails[message.id] ?? [])
                 }
             }
-            .scrollTargetLayout()
             .padding(.vertical, 6)
         }
+        .defaultScrollAnchor(.bottom)
+        .defaultScrollAnchor(.top, for: .alignment)   // a log shorter than the screen starts at its top
         .scrollPosition($position)
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .onAppear(perform: scrollToEnd)
-        .onScrollTargetVisibilityChange(idType: UUID.self, threshold: 0.1) { ids in
-            following.visibleIDs = Set(ids)
-        }
-        .onScrollPhaseChange { oldPhase, newPhase in
-            switch (oldPhase, newPhase) {
-            case (_, .interacting):
-                following.followsEnd = false   // the user has the log in hand
-            case (.interacting, .idle), (.decelerating, .idle):
-                // Where they let it come to rest: following again if that's the end.
-                following.followsEnd = messages.last.map { following.visibleIDs.contains($0.id) } ?? true
-            default:
-                break
-            }
-        }
-        .onChange(of: messages.last?.id) {
-            if following.followsEnd { scrollToEnd() }
-        }
-        .onChange(of: sentCount) {
-            following.followsEnd = true
-            scrollToEnd()
-        }
-        // The keyboard coming or going changes how much of the log shows.
-        .onScrollGeometryChange(for: CGFloat.self, of: { $0.containerSize.height - $0.contentInsets.top - $0.contentInsets.bottom }) { _, _ in
-            if following.followsEnd { scrollToEnd() }
+        .onChange(of: sentCount) { position.scrollTo(edge: .bottom) }
+        // The sidebar opening or closing changes the room the log has, within its animation.
+        // Every line wraps again, the log's height changes by a lot, and staying at the end
+        // means scrolling by as much: done within the animation, UIKit animates that too, and
+        // sweeps the log across the screen. So the log takes its new width just after instead,
+        // all at once. Until then it keeps its old one, against the edge the sidebar isn't on.
+        .frame(width: width)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .trailing)
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { room in
+            guard room > 0 else { return }   // not laid out yet
+            Task { width = room }
         }
     }
-
-    private func scrollToEnd() {
-        guard let last = messages.last else { return }
-        position.scrollTo(id: last.id, anchor: .bottom)
-    }
-}
-
-/// What LogView keeps track of as the log scrolls. A plain object, so that keeping track
-/// doesn't redraw the log.
-private final class LogFollowing {
-    /// Whether to keep the newest line in view.
-    var followsEnd = true
-    /// The rows on screen, at least a little.
-    var visibleIDs: Set<UUID> = []
 }
 
 /// One line of the log: the time, who said it, what they said with its web links tappable,

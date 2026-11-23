@@ -5,7 +5,8 @@ import SwiftUI
 struct ContentView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    /// Open to begin with, and stated rather than automatic, so that it says what's on screen.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// What's typed and not sent yet. One for the app, as on the Mac: it stays while the user
     /// looks at another conversation.
     @State private var draft = ""
@@ -16,7 +17,7 @@ struct ContentView: View {
     var body: some View {
         @Bindable var store = store
         let closing = store.sidebarItem(withID: store.pendingCloseConversationID)
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: sidebarVisibility) {
             SidebarView(isPresentingSettings: $isPresentingSettings)
         } detail: {
             Group {
@@ -77,6 +78,18 @@ struct ContentView: View {
             } else {
                 Text("Your messages with \(conversation.name) will be cleared.")
             }
+        }
+    }
+
+    /// The sidebar as the split view shows it, and as it changes it while the app is in front.
+    /// In the background the system lays the app out narrow for a moment, one thing at a time,
+    /// and the split view then has the sidebar closed: taken at its word, it would stay closed
+    /// on coming back to a screen wide enough for both.
+    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding {
+            columnVisibility
+        } set: { visibility in
+            if Platform.isAppActive { columnVisibility = visibility }
         }
     }
 
