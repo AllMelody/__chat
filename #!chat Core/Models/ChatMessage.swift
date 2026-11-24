@@ -40,6 +40,6 @@ struct ChatMessage: Identifiable, Equatable {
 
 struct MessageThumbnail {
     let url: String
-    /// Nil until it has loaded. Up to 600 pixels either way; the log fits it into 200 points.
+    /// Nil until it has loaded. Up to 600 pixels either way; each log fits it to its own size.
     var image: CGImage?
 }

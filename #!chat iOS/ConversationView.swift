@@ -255,10 +255,14 @@ private struct MessageRow: View {
     }
 }
 
-/// An image a line links to, at most 200 points either way, which opens the link when tapped.
-/// Until it has loaded, a placeholder holds its place.
+/// An image a line links to, which opens the link when tapped. At most 370 × 280 points: most of
+/// a phone's width, and no bigger on a wider screen; a narrower phone gets the width there is.
+/// That's more pixels than a thumbnail has (600 at most), so a big one is scaled up, a little
+/// soft. Until it has loaded, a placeholder holds its place.
 private struct ThumbnailView: View {
     let thumbnail: MessageThumbnail
+    private static let maxWidth: CGFloat = 370
+    private static let maxHeight: CGFloat = 280
 
     var body: some View {
         // Thumbnails are made from links that were URLs already.
@@ -267,12 +271,15 @@ private struct ThumbnailView: View {
                 Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFit()
-                    .frame(maxWidth: 200, maxHeight: 200, alignment: .leading)
+                    // Rounded before it's framed: the frame is wider than an image that's
+                    // tall or square.
                     .clipShape(.rect(cornerRadius: 6))
+                    .frame(maxWidth: Self.maxWidth, maxHeight: Self.maxHeight, alignment: .leading)
             } else {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
-                    .frame(width: 200, height: 150)
+                    .aspectRatio(4 / 3, contentMode: .fit)
+                    .frame(maxWidth: Self.maxWidth)
             }
         }
     }
