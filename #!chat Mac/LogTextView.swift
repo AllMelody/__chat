@@ -364,22 +364,10 @@ struct LogTextView: NSViewRepresentable {
         if showThumbnails, let thumbs = thumbnailsByMessage[msg.id], !thumbs.isEmpty {
             combined.append(NSAttributedString(string: "\n", attributes: attrs))
             for (i, item) in thumbs.enumerated() {
-                // Create image attachment with max size of 200x200 logical pixels
-                let maxSize = NSSize(width: 200, height: 200)
-                let attachment: NSTextAttachment
-
-                if let cg = item.image {
-                    // Real image - use actual prepared size
-                    let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-                    attachment = makeImageAttachment(img, maxSize: maxSize)
-                } else {
-                    // Placeholder - reserve exact space that the image will occupy
-                    // Use a fixed aspect ratio or default size to prevent layout shift
-                    let placeholderSize = NSSize(width: 200, height: 150) // 4:3 aspect ratio placeholder
-                    let placeholder = NSImage(size: placeholderSize)
-                    attachment = RetinaImageAttachment(image: placeholder, displaySize: placeholderSize)
-                }
-
+                let attachment = NSTextAttachment()
+                // Until the image has loaded, a blank one holds a place for it.
+                attachment.image = item.image.map { NSImage(cgImage: $0, size: Self.thumbnailSize(for: $0)) }
+                    ?? Self.thumbnailPlaceholder
                 let attStr = NSMutableAttributedString(attachment: attachment)
                 let range = NSRange(location: 0, length: attStr.length)
                 attStr.addAttribute(.link, value: item.url, range: range)
@@ -397,89 +385,17 @@ struct LogTextView: NSViewRepresentable {
         let bottomGap = contentHeight - visible.maxY
         return bottomGap <= 2
     }
-    
-    final class RetinaImageAttachment: NSTextAttachment {
-        let displaySize: NSSize
 
-        init(image: NSImage, displaySize: NSSize) {
-            self.displaySize = displaySize
-            super.init(data: nil, ofType: nil)
-            self.image = image
-        }
-
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-        override func attachmentBounds(for textContainer: NSTextContainer?,
-                                       proposedLineFragment lineFrag: NSRect,
-                                       glyphPosition position: CGPoint,
-                                       characterIndex charIndex: Int) -> NSRect {
-            return NSRect(origin: .zero, size: displaySize)
-        }
-        
-        override func image(forBounds imageBounds: NSRect, 
-                           textContainer: NSTextContainer?, 
-                           characterIndex charIndex: Int) -> NSImage? {
-            guard let originalImage = self.image else { return nil }
-            
-            // If the original image is already the right size, just return it
-            if abs(originalImage.size.width - imageBounds.width) < 1.0 &&
-               abs(originalImage.size.height - imageBounds.height) < 1.0 {
-                return originalImage
-            }
-            
-            // Drawing-handler images render lazily at the destination's backing scale
-            return NSImage(size: imageBounds.size, flipped: false) { rect in
-                NSGraphicsContext.current?.imageInterpolation = .high
-                originalImage.draw(in: rect,
-                                   from: NSRect(origin: .zero, size: originalImage.size),
-                                   operation: .sourceOver,
-                                   fraction: 1.0)
-                return true
-            }
-        }
+    /// The size a thumbnail shows at: fitted into 200 points either way (a smaller image grows to
+    /// fit), in whole points. NSImage draws the image's own pixels, up to 600 either way, at the
+    /// screen's resolution by itself. What blurs a thumbnail is a size with a fraction of a point
+    /// in it, like 200 × 133.33: its edges fall between pixels, and so does every line after it.
+    private static func thumbnailSize(for image: CGImage) -> NSSize {
+        let scale = min(200 / CGFloat(image.width), 200 / CGFloat(image.height))
+        return NSSize(width: max(1, (CGFloat(image.width) * scale).rounded()),
+                      height: max(1, (CGFloat(image.height) * scale).rounded()))
     }
 
-    private func prepareImageForAttachment(_ sourceImage: NSImage, targetSize: NSSize) -> NSImage {
-        // Calculate aspect ratio and determine final display size
-        let sourceSize = sourceImage.size
-        guard sourceSize.width > 0 && sourceSize.height > 0 else {
-            return sourceImage
-        }
-        
-        let aspectRatio = sourceSize.width / sourceSize.height
-        let finalSize: NSSize
-        
-        if targetSize.width / aspectRatio <= targetSize.height {
-            // Width-constrained
-            finalSize = NSSize(width: targetSize.width, height: targetSize.width / aspectRatio)
-        } else {
-            // Height-constrained  
-            finalSize = NSSize(width: targetSize.height * aspectRatio, height: targetSize.height)
-        }
-        
-        // If the image is already the right size, return it as-is
-        if abs(sourceSize.width - finalSize.width) < 1.0 && 
-           abs(sourceSize.height - finalSize.height) < 1.0 {
-            return sourceImage
-        }
-        
-        // Create a new properly-sized image; the drawing handler renders lazily at the
-        // destination's backing scale, so it stays sharp on Retina displays.
-        return NSImage(size: finalSize, flipped: false) { rect in
-            NSGraphicsContext.current?.imageInterpolation = .high
-            sourceImage.draw(in: rect,
-                             from: NSRect(origin: .zero, size: sourceSize),
-                             operation: .sourceOver,
-                             fraction: 1.0)
-            return true
-        }
-    }
-
-    private func makeImageAttachment(_ img: NSImage, maxSize: NSSize) -> NSTextAttachment {
-        // Prepare the image with proper sizing and aspect ratio preservation
-        let preparedImage = prepareImageForAttachment(img, targetSize: maxSize)
-        return RetinaImageAttachment(image: preparedImage, displaySize: preparedImage.size)
-    }
-
-
+    /// Space for a thumbnail that hasn't loaded yet. It draws nothing.
+    private static let thumbnailPlaceholder = NSImage(size: NSSize(width: 200, height: 150))
 }
