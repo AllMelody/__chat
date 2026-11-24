@@ -8,12 +8,20 @@ struct ConversationView: View {
     @Binding var draft: String
     @State private var isShowingMembers = false
     @FocusState private var composerIsFocused: Bool
+    /// Whether the keyboard moves the log and the field: not until the field is typed into.
+    @State private var followsKeyboard = false
     /// Bumped each time the user sends something.
     @State private var sentCount = 0
 
     var body: some View {
         LogView(messages: item.log, thumbnails: prefs.showImageThumbnails ? store.messageThumbnails : [:], sentCount: sentCount)
             .safeAreaBar(edge: .bottom) { composer }
+            // Going back to the list with the keyboard up, the system keeps the keyboard for this
+            // screen, and brings it back for an instant as the next conversation slides in, with
+            // no field for it. The log would make room for it within the slide, and spring back
+            // from under the bottom of the screen. A keyboard nobody asked for is left alone.
+            .ignoresSafeArea(.keyboard, edges: followsKeyboard ? [] : .bottom)
+            .onChange(of: composerIsFocused) { if composerIsFocused { followsKeyboard = true } }
             .navigationTitle(item.name)
             .modifier(TopicSubtitle(channel: item.channel))
             .navigationBarTitleDisplayMode(.inline)
@@ -26,16 +34,27 @@ struct ConversationView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 8) {
+        // The button stays beside the last line as the field grows.
+        HStack(alignment: .bottom, spacing: 8) {
+            // As in Messages, Return breaks the line and only the button sends, which leaves the
+            // keyboard where it is for the next one. Each line goes out as a message of its own.
             // A server takes only commands.
-            TextField(item.isConversation ? "Message \(item.name)" : "Command, like /join #channel", text: $draft)
+            TextField(item.isConversation ? "Message \(item.name)" : "Command, like /join #channel", text: $draft, axis: .vertical)
                 .focused($composerIsFocused)
+                .lineLimit(1...5)
                 .textInputAutocapitalization(.sentences)
-                .submitLabel(.send)
-                .onSubmit(send)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 11)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                // The field itself is only as tall as its text: a tap on the space around it,
+                // anywhere in the capsule, is one on the field too. Behind the field rather
+                // than over it, so that taps on the text stay the field's own.
+                .background {
+                    Color.clear
+                        .contentShape(.rect)
+                        .onTapGesture { composerIsFocused = true }
+                }
+                // A capsule around one line, and the same corners around more.
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
             Button("Send", systemImage: "arrow.up", action: send)
                 .labelStyle(.iconOnly)
                 .fontWeight(.semibold)
@@ -49,8 +68,6 @@ struct ConversationView: View {
     }
 
     private func send() {
-        // Return would take the keyboard away, and the next line is often on its way.
-        composerIsFocused = true
         guard item.canSend(draft), store.handleInputFromComposer(draft) else { return }
         draft = ""
         sentCount += 1
@@ -155,6 +172,14 @@ private struct LogView: View {
         .defaultScrollAnchor(.top, for: .alignment)   // a log shorter than the screen starts at its top
         .scrollPosition($position)
         .onChange(of: sentCount) { position.scrollTo(edge: .bottom) }
+        // A log short enough to be all in view sits at its top, which to the scroll view isn't
+        // its end, so it isn't kept there. When the keyboard, or one more line, leaves it too
+        // tall for the room it has, it goes to its end.
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentSize.height <= geometry.containerSize.height
+        } action: { _, isAllInView in
+            if !isAllInView { position.scrollTo(edge: .bottom) }
+        }
         // The sidebar opening or closing changes the room the log has, within its animation.
         // Every line wraps again, the log's height changes by a lot, and staying at the end
         // means scrolling by as much: done within the animation, UIKit animates that too, and

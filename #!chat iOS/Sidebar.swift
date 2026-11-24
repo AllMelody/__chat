@@ -70,6 +70,11 @@ struct SidebarView: View {
         Binding {
             store.selectedItemID
         } set: { id in
+            // The keyboard is put away before the conversation being typed into goes. Left to go
+            // with its field, it's gone at once instead of sliding away.
+            if id != store.selectedItemID {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
             if let item = store.sidebarItem(withID: id) {
                 store.select(item)
             } else {
