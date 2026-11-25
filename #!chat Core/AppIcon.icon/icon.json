@@ -1,57 +1,67 @@
 {
-  "fill" : {
-    "linear-gradient" : [
+  "fill": {
+    "linear-gradient": [
       "display-p3:0.69000,0.85500,0.51000,1.00000",
       "display-p3:0.45500,0.71000,0.29000,1.00000"
-    ]
-  },
-  "groups" : [
-    {
-      "layers" : [
-        {
-          "glass" : false,
-          "image-name" : "Lime.svg",
-          "name" : "Lime"
-        }
-      ],
-      "shadow" : {
-        "kind" : "none",
-        "opacity" : 0
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0.0
       },
-      "specular" : false,
-      "translucency" : {
-        "enabled" : false,
-        "value" : 0
-      }
-    },
-    {
-      "layers" : [
-        {
-          "glass" : true,
-          "image-name" : "Dot.svg",
-          "name" : "Dot"
-        },
-        {
-          "glass" : true,
-          "image-name" : "Bar.svg",
-          "name" : "Bar"
-        }
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "specular" : true,
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.35
+      "stop": {
+        "x": 0.5,
+        "y": 1.0
       }
     }
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Lime.svg",
+          "name": "Lime",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Dot.svg",
+          "name": "Dot",
+          "glass": true
+        },
+        {
+          "image-name": "Bar.svg",
+          "name": "Bar",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.35
+      },
+      "specular": true
+    }
   ],
-  "supported-platforms" : {
-    "circles" : [
+  "supported-platforms": {
+    "circles": [
       "watchOS"
     ],
-    "squares" : "shared"
+    "squares": "shared"
   }
 }
