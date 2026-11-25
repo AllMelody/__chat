@@ -9,7 +9,7 @@ A SwiftUI IRC client for the Mac and the iPhone, built on Network.framework with
 - `#!chat Core Tests/` uses Swift Testing with `@testable import __chat`, hosted in the Mac app.
 - The IRC layer's `.privateMessage` (a PRIVMSG) is a different thing from the app's `IRCPrivateConversation` / `.privateConversation`.
 
-Build settings that shape the code: Swift 5 language mode, `MainActor` default isolation, approachable concurrency, and `MemberImportVisibility` (app targets only, not the tests). Deployment targets are macOS 26 and iOS 27. The mismatch is deliberate, so keep both.
+Build settings that shape the code: Swift 6 language mode, `MainActor` default isolation, approachable concurrency (what Swift 6 doesn't already include of it, `NonisolatedNonsendingByDefault` and `InferIsolatedConformances`, is also set by name), and `MemberImportVisibility` (app targets only, not the tests). Deployment targets are macOS 26 and iOS 27. The mismatch is deliberate, so keep both.
 
 ## Product decisions
 
@@ -49,14 +49,11 @@ find "#!chat Core Tests" -name '*.swift' | while read -r f; do ln -s "$R/$f" "$H
 // swift-tools-version: 6.2
 import PackageDescription
 
-let common: [SwiftSetting] = [  // SWIFT_APPROACHABLE_CONCURRENCY, spelled out
-    .swiftLanguageMode(.v5),
+let common: [SwiftSetting] = [  // what SWIFT_APPROACHABLE_CONCURRENCY adds to Swift 6, spelled out
+    .swiftLanguageMode(.v6),
     .defaultIsolation(MainActor.self),
     .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
     .enableUpcomingFeature("InferIsolatedConformances"),
-    .enableUpcomingFeature("InferSendableFromCaptures"),
-    .enableUpcomingFeature("GlobalActorIsolatedTypesUsability"),
-    .enableUpcomingFeature("DisableOutwardActorInference"),
 ]
 
 let package = Package(
@@ -72,14 +69,12 @@ let package = Package(
 
 1. **Mac app:** run `swift build` in `$H`.
 2. **Tests:** delete the `#!chat_Mac_ChatApp.swift` link, because its `@main` clashes with the test runner's, then run `swift test`. `IRCClientTests` talk to a loopback fake server and are reliable.
-3. **iPhone app:** from the repo root, type-check it against the iOS SDK inside Xcode. A clean run prints nothing and exits 0.
+3. **iPhone app:** from the repo root, check it against the iOS SDK inside Xcode. With `-emit-sil`, not `-typecheck`: Swift 6's data-race errors come from the passes after type checking. A clean run prints nothing and exits 0.
    ```sh
-   find "#!chat Core" "#!chat iOS" -name '*.swift' -print0 | xargs -0 xcrun --sdk iphoneos swiftc -typecheck \
-     -target arm64-apple-ios27.0 -module-name __chat -parse-as-library -swift-version 5 \
+   find "#!chat Core" "#!chat iOS" -name '*.swift' -print0 | xargs -0 xcrun --sdk iphoneos swiftc -emit-sil -wmo -o /dev/null \
+     -target arm64-apple-ios27.0 -module-name __chat -parse-as-library -swift-version 6 \
      -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault \
-     -enable-upcoming-feature InferIsolatedConformances -enable-upcoming-feature InferSendableFromCaptures \
-     -enable-upcoming-feature GlobalActorIsolatedTypesUsability -enable-upcoming-feature DisableOutwardActorInference \
-     -enable-upcoming-feature MemberImportVisibility
+     -enable-upcoming-feature InferIsolatedConformances -enable-upcoming-feature MemberImportVisibility
    ```
 
 When reporting, say that these checks cover compilation and tests, not the running app. To check a change in the running app (a copy with its own bundle ID, a harness, fake servers, the phone), read `docs/end-to-end-testing.md`.

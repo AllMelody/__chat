@@ -122,7 +122,7 @@ final class EventQueue {
     func next() async -> IRCEvent? {
         var iterator = self.iterator
         defer { self.iterator = iterator }
-        return await iterator.next()
+        return await iterator.next(isolation: #isolation)
     }
 }
 
@@ -145,7 +145,7 @@ final class FakeIRCServer {
         }
         listener.newConnectionHandler = { [incoming] in incoming.continuation.yield($0) }
         listener.start(queue: .main)
-        port = await ports.stream.first { _ in true } ?? 0
+        port = await ports.stream.first { @Sendable _ in true } ?? 0
     }
 
     deinit {
@@ -154,7 +154,7 @@ final class FakeIRCServer {
     }
 
     func accept() async throws {
-        let peer = try #require(await incoming.stream.first { _ in true })
+        let peer = try #require(await incoming.stream.first { @Sendable _ in true })
         peer.start(queue: .main)
         self.peer = peer
     }

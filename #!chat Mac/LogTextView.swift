@@ -4,24 +4,28 @@ import SwiftUI
 extension NSAttributedString.Key {
     /// Marks the text of a nick-mention line; the value is the wash NSColor. Drawn by
     /// LogLayoutManager across the full line width instead of just behind the glyphs.
-    static let ircHighlightLine = NSAttributedString.Key("ircHighlightLine")
+    nonisolated static let ircHighlightLine = NSAttributedString.Key("ircHighlightLine")
 }
 
 /// TextKit 1 layout manager for the chat log. For ranges tagged .ircHighlightLine it fills
 /// each line fragment edge to edge with the marker's color, underneath normal background
 /// and selection drawing (super runs after, so selection stays visible on top).
-private final class LogLayoutManager: NSLayoutManager {
+///
+/// NSLayoutManager isn't tied to the main actor, so a subclass can't be either. Of what this
+/// one reads, only the text view's width is the main actor's; the view draws on the main thread.
+private nonisolated final class LogLayoutManager: NSLayoutManager {
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         if let storage = textStorage, let textView = textContainers.first?.textView {
+            // Full view width on purpose (not the fragment rect), so the wash also
+            // covers the container inset gutters.
+            let width = MainActor.assumeIsolated { textView.bounds.width }
             let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
             storage.enumerateAttribute(.ircHighlightLine, in: charRange, options: []) { value, range, _ in
                 guard let color = value as? NSColor else { return }
                 color.setFill()
                 let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
                 self.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, _, _ in
-                    // Full view width on purpose (not the fragment rect), so the wash also
-                    // covers the container inset gutters.
-                    NSRect(x: 0, y: rect.minY + origin.y, width: textView.bounds.width, height: rect.height)
+                    NSRect(x: 0, y: rect.minY + origin.y, width: width, height: rect.height)
                         .fill(using: .sourceOver)
                 }
             }
@@ -61,7 +65,7 @@ struct LogTextView: NSViewRepresentable {
         /// off for "today", so once the day turns every line needs re-rendering.
         var renderedDay: Date?
 
-        deinit {
+        isolated deinit {
             if let observer = boundsObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
@@ -135,14 +139,18 @@ struct LogTextView: NSViewRepresentable {
         // text-view stack alive and prevents deinit from ever removing the observers.
         let coordinator = context.coordinator
         coordinator.boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { [weak coordinator] _ in
-            guard let coordinator, let tv = coordinator.textView, let sv = coordinator.scrollView else { return }
-            coordinator.isPinnedToBottom = isAtBottom(textView: tv, scrollView: sv)
+            MainActor.assumeIsolated {
+                guard let coordinator, let tv = coordinator.textView, let sv = coordinator.scrollView else { return }
+                coordinator.isPinnedToBottom = isAtBottom(textView: tv, scrollView: sv)
+            }
         }
         scroll.postsFrameChangedNotifications = true
         coordinator.frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak coordinator] _ in
-            guard let coordinator, let tv = coordinator.textView else { return }
-            if coordinator.isPinnedToBottom {
-                tv.scrollToEndOfDocument(nil)
+            MainActor.assumeIsolated {
+                guard let coordinator, let tv = coordinator.textView else { return }
+                if coordinator.isPinnedToBottom {
+                    tv.scrollToEndOfDocument(nil)
+                }
             }
         }
         coordinator.onFindBarClosed = onFindBarClosed
