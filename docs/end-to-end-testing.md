@@ -44,7 +44,7 @@ Ask the user before each phone session. The phone has to be unlocked and ready, 
 - **Test data:**
   - Gate `ChatStore`'s auto-connect on the same variable, so test launches stay offline.
   - Fill the first server's in-memory `log` with made-up lines.
-  - Make test conversations with `getOrCreatePrivateConversation(with:)`. Private conversations aren't persisted, while servers and channels are, so the harness creates only private conversations.
+  - Make test conversations with `getOrCreatePrivateConversation(with:)`. Private conversations are saved with their server, as channels are, though not what was said in them. So the harness closes every one it made, with `closeConversation`, before it's done, and a normal launch afterwards should show none of them in the sidebar.
 - **Commands in:** send them with `devicectl device copy to --domain-type appDataContainer --domain-identifier <bundle id> --source <file> --destination tmp/cmd`, and have the harness poll for them. End each command file with a terminator line, and have the harness wait for it. A "Failed to retrieve the file node for tmp/cmd" message after the app has taken the file is harmless.
 - **Log out:** append to `tmp/dbg.log` and fetch it with `copy from`. `launch --console` breaks as soon as the app is suspended.
 - **Screenshots:** run `devicectl device capture screenshot --display-unique-id <id>`, with the ids from `devicectl device info displays`. On a foldable, the unfolded inner screen isn't the primary display. Screen recording isn't supported.

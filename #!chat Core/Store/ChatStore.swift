@@ -53,6 +53,7 @@ final class ChatStore {
     weak var preferences: AppPreferences? { didSet { mirrorPreferencesToServices() } }
     @ObservationIgnored private var preferencesMirrorTask: Task<Void, Never>?
     @ObservationIgnored private var badgeTask: Task<Void, Never>?
+    @ObservationIgnored private var conversationsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var applicationObservers: [any NSObjectProtocol] = []
     /// For each server, whether its replies answer what the user sent from here.
     @ObservationIgnored private var answerWindows: [UUID: AnswerWindow] = [:]
@@ -62,6 +63,7 @@ final class ChatStore {
         loadServers()
         observeApplication()
         mirrorAttentionToBadge()
+        saveConversationsAsTheyChange()
         // Unit tests run inside the app, which mustn't go connecting to servers meanwhile.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Delay auto-connect to ensure UI is ready
@@ -85,8 +87,9 @@ final class ChatStore {
         imageCache.onThumbnailUpdated = { [weak self] messageID, thumbnails in
             self?.messageThumbnails[messageID] = thumbnails
         }
-        notificationService.onSelectItem = { [weak self] itemID in
-            guard let self, let item = self.sidebarItems.first(where: { $0.id == itemID }) else { return }
+        notificationService.onSelectConversation = { [weak self] serverID, name in
+            guard let self, let server = self.server(withID: serverID),
+                  let item = self.conversation(named: name, on: server) else { return }
             self.select(item)
         }
     }
@@ -137,16 +140,32 @@ final class ChatStore {
     /// looking at the conversation (app active + conversation selected) or the message is
     /// old backlog replayed on reconnect (ZNC playback carries server-time) rather than
     /// live traffic.
-    private func notify(_ title: String, about message: ChatMessage, on server: IRCServer, itemID: UUID) {
+    private func notify(_ title: String, about message: ChatMessage, in conversation: SidebarItem) {
         guard Date().timeIntervalSince(message.time) < 60 else { return }
-        if isOnScreen(itemID) { return }
+        if isOnScreen(conversation.id) { return }
         let sender = message.senderNick ?? "Someone"
         notificationService.post(
             title: title,
-            subtitle: server.name,
+            subtitle: conversation.server.name,
             body: message.isAction ? "* \(sender) \(message.text)" : message.text,
-            itemID: itemID
+            serverID: conversation.server.id,
+            conversation: conversation.name
         )
+    }
+
+    /// Saves the servers again whenever a private conversation opens, closes or follows a
+    /// rename, so that the ones open are there after a relaunch (IRCServerRecord). They come
+    /// and go from many places, so they're watched rather than saved at each. Observations
+    /// emits the current value first, which loading has just saved, then every change.
+    private func saveConversationsAsTheyChange() {
+        let peers = Observations { [weak self] in
+            self?.servers.map { $0.privateConversations.map(\.nickname) } ?? []
+        }
+        conversationsSaveTask = Task { [weak self] in
+            for await _ in peers.dropFirst() {
+                self?.persistServers()
+            }
+        }
     }
 
     /// Keeps preference values that backing services mirror (currently the raw-traffic debug
@@ -735,7 +754,8 @@ final class ChatStore {
             channel.log.append(message)
             scanMessageForThumbnails(message)
             if message.isHighlight {
-                notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message, on: server, itemID: channel.id)
+                notify("\(message.senderNick ?? "Someone") mentioned you in \(channel.name)", about: message,
+                       in: SidebarItem(server: server, kind: .channel(channel)))
             }
 
             channel.countUnread(message, isOnScreen: isOnScreen(channel.id))
@@ -746,7 +766,7 @@ final class ChatStore {
             scanMessageForThumbnails(message)
             // A private message is meant for us, so every one is worth a notification.
             if !message.isFromMe {
-                notify("Message from \(peer)", about: message, on: server, itemID: pm.id)
+                notify("Message from \(peer)", about: message, in: SidebarItem(server: server, kind: .privateConversation(pm)))
             }
 
             pm.countUnread(message, isOnScreen: isOnScreen(pm.id))

@@ -39,4 +39,21 @@ struct IRCServerRecordTests {
         #expect(object["channels"] == nil)
         #expect(IRCServer(from: server.toRecord()).channels.isEmpty)
     }
+
+    @Test func `The private conversations open come back, without what was said`() throws {
+        let server = IRCServer(name: "n", host: "h", port: 6697, password: nil)
+        server.getOrCreatePrivateConversation(with: "*status").log.append(ChatMessage(time: Date(), text: "Disconnected from IRC"))
+        _ = server.getOrCreatePrivateConversation(with: "Melody")
+
+        let restored = IRCServer(from: try JSONDecoder().decode(IRCServerRecord.self, from: JSONEncoder().encode(server.toRecord())))
+        #expect(restored.privateConversations.map(\.nickname) == ["*status", "Melody"])
+        #expect(restored.privateConversations.allSatisfy { $0.log.isEmpty })
+    }
+
+    @Test func `A server with no private conversations saves no list`() throws {
+        let server = IRCServer(name: "n", host: "h", port: 6697, password: nil)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(server.toRecord())) as? [String: Any])
+        #expect(object["privateConversations"] == nil)
+        #expect(IRCServer(from: server.toRecord()).privateConversations.isEmpty)
+    }
 }

@@ -96,8 +96,10 @@ final class IRCServer: Identifiable {
 
     func toRecord() -> IRCServerRecord {
         let savedChannels = channels.filter(\.isSaved).map(\.name)
+        let peers = privateConversations.map(\.nickname)
         return IRCServerRecord(id: id, name: name, host: host, port: port, useTLS: useTLS, autoConnectOnLaunch: autoConnectOnLaunch, nickname: nickname,
-                               useSASL: useSASL, channels: savedChannels.isEmpty ? nil : savedChannels)
+                               useSASL: useSASL, channels: savedChannels.isEmpty ? nil : savedChannels,
+                               privateConversations: peers.isEmpty ? nil : peers)
     }
 
     convenience init(from r: IRCServerRecord) {
@@ -110,6 +112,8 @@ final class IRCServer: Identifiable {
             channel.isSaved = true
             return channel
         }
+        // So are the private conversations, with what was said in them gone.
+        privateConversations = (r.privateConversations ?? []).map { IRCPrivateConversation(nickname: $0) }
     }
 }
 
@@ -127,9 +131,12 @@ struct IRCServerRecord: Codable {
     let useSASL: Bool?
     /// The channels to join again on connecting, by name. Their keys aren't saved.
     let channels: [String]?
+    /// The private conversations open, by whom they're with: kept, like the channels, so that
+    /// a notification about one still has it to open after the app has quit.
+    let privateConversations: [String]?
 
     init(id: UUID, name: String, host: String, port: Int, password: String? = nil, useTLS: Bool?, autoConnectOnLaunch: Bool?, nickname: String? = nil,
-         useSASL: Bool? = nil, channels: [String]? = nil) {
+         useSASL: Bool? = nil, channels: [String]? = nil, privateConversations: [String]? = nil) {
         self.id = id
         self.name = name
         self.host = host
@@ -140,6 +147,7 @@ struct IRCServerRecord: Codable {
         self.nickname = nickname
         self.useSASL = useSASL
         self.channels = channels
+        self.privateConversations = privateConversations
     }
 
     // Custom encode: deliberately OMIT password so it never returns to plaintext storage.
@@ -154,6 +162,7 @@ struct IRCServerRecord: Codable {
         try c.encodeIfPresent(nickname, forKey: .nickname)
         try c.encodeIfPresent(useSASL, forKey: .useSASL)
         try c.encodeIfPresent(channels, forKey: .channels)
+        try c.encodeIfPresent(privateConversations, forKey: .privateConversations)
         // password intentionally not encoded
     }
 
