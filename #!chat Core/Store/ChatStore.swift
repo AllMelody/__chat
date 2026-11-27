@@ -47,6 +47,9 @@ final class ChatStore {
         var number: Int
     }
     var findRequest: FindRequest?
+    /// Edit ▸ Paste and Edit: the clipboard's text, in a sheet to edit it in before it's sent.
+    var isPresentingPasteSheet = false
+    var pendingPasteText = ""
     #endif
     
     // Preferences

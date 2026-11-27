@@ -48,6 +48,7 @@ struct ContentView: View {
                     TopicEditorView(channel: channel)
                 }
             }
+            .sheet(isPresented: $store.isPresentingPasteSheet) { PasteSheet(text: store.pendingPasteText) }
             .confirmationDialog("Delete Server?", isPresented: $store.isPresentingDeleteServer,
                                 presenting: store.server(withID: store.pendingDeleteServerID)) { server in
                 Button("Delete", role: .destructive) { store.deleteServer(server) }

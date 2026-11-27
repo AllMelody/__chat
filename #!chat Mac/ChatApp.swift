@@ -24,6 +24,7 @@ struct ChatApp: App {
             .environment(preferences)
             .commands {
                 CloseCommands()
+                PasteCommands()
                 FindCommands()
 
                 CommandMenu("Server") {
@@ -113,6 +114,27 @@ struct FindCommands: Commands {
             Button("Find Previous") { store?.find(.previousMatch) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(store == nil)
+        }
+    }
+}
+
+/// Edit ▸ Paste and Edit, ⇧⌘V, opens the clipboard's text in a sheet where it wraps over as
+/// many lines as it takes, to edit before it's sent: the tracking off a long link, say.
+struct PasteCommands: Commands {
+    /// Set only while the main window is key.
+    @FocusedValue(ChatStore.self) private var store
+
+    var body: some Commands {
+        CommandGroup(after: .pasteboard) {
+            Button("Paste and Edit…") {
+                guard let store else { return }
+                // As Paste does nothing when there's no text to paste.
+                guard let text = NSPasteboard.general.string(forType: .string) else { return NSSound.beep() }
+                store.pendingPasteText = text
+                store.isPresentingPasteSheet = true
+            }
+            .keyboardShortcut("v", modifiers: [.command, .shift])
+            .disabled(store == nil)
         }
     }
 }

@@ -166,6 +166,38 @@ struct ChangeNicknameView: View {
     }
 }
 
+/// Edit ▸ Paste and Edit: pasted text to edit before it goes. Return starts a new line, so
+/// ⌘Return sends. It goes as if from the composer: a message a line, or a slash command.
+struct PasteSheet: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+
+    init(text: String) {
+        _text = State(initialValue: text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextEditor(text: $text)
+                .font(.body)
+                .frame(height: 160)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Send") {
+                    // As in the composer, what couldn't go stays to try again.
+                    if store.handleInputFromComposer(text) { dismiss() }
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!(store.selectedItem?.canSend(text) ?? false))
+            }
+        }
+        .padding(16)
+        .frame(width: 480)
+    }
+}
+
 struct TopicEditorView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss

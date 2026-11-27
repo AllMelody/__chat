@@ -12,6 +12,7 @@ A native macOS IRC client built with SwiftUI and Network.framework.
 - Inline image thumbnails
 - Flood-protected send queue
 - Multi-line composer with channel topics, nick completion (Tab) and history (↑/↓)
+- Paste and Edit (⇧⌘V): pasted text in a sheet, to edit before sending (⌘Return)
 - Find in the log (⌘F)
 - Some slash commands (`/join`, `/part`, `/nick`, `/msg`, `/query`, …); anything else, like `/whois` or `/mode`, goes to the server as typed, and its answer shows in the log. Start a message with `//` to send a leading `/`
 
