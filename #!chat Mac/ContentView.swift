@@ -87,7 +87,7 @@ struct ContentView: View {
             // No leading padding here: the log's left gutter comes from the text view's
             // container inset, so highlight washes can run edge to edge.
             LogTextView(logVersion: store.logVersion, selectionToken: store.selectedItemID, messages: currentMessages, thumbnailsByMessage: store.messageThumbnails, showThumbnails: prefs.showImageThumbnails,
-                        findRequest: store.findRequest, onFindBarClosed: focusComposer)
+                        playsAnimatedThumbnails: activeState == .key, findRequest: store.findRequest, onFindBarClosed: focusComposer)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, 2)
 

@@ -42,4 +42,7 @@ struct MessageThumbnail {
     let url: String
     /// Nil until it has loaded. Up to 600 pixels either way; each log fits it to its own size.
     var image: CGImage?
+    /// The cached file of an animated GIF, of which `image` is the first frame. The Mac's log
+    /// plays it; the iPhone's doesn't yet, and has none.
+    var animation: URL?
 }

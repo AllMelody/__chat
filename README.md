@@ -9,7 +9,7 @@ A native macOS IRC client built with SwiftUI and Network.framework.
 - Channels and private messages; the channels you're in are joined again on the next launch
 - Auto-reconnect with backoff
 - Passwords stored in the macOS Keychain; SASL PLAIN login
-- Inline image thumbnails
+- Inline image thumbnails, with animated GIFs playing in place
 - Flood-protected send queue
 - Multi-line composer with channel topics, nick completion (Tab) and history (↑/↓)
 - Paste and Edit (⇧⌘V): pasted text in a sheet, to edit before sending (⌘Return)

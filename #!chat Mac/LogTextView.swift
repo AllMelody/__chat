@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import SwiftUI
 
@@ -5,6 +6,9 @@ extension NSAttributedString.Key {
     /// Marks the text of a nick-mention line; the value is the wash NSColor. Drawn by
     /// LogLayoutManager across the full line width instead of just behind the glyphs.
     nonisolated static let ircHighlightLine = NSAttributedString.Key("ircHighlightLine")
+    /// Marks the attachment of an animated thumbnail; the value is the URL of the cached GIF.
+    /// The log plays it over the attachment while it's in view.
+    nonisolated static let ircAnimatedThumbnail = NSAttributedString.Key("ircAnimatedThumbnail")
 }
 
 /// TextKit 1 layout manager for the chat log. For ranges tagged .ircHighlightLine it fills
@@ -29,8 +33,56 @@ private nonisolated final class LogLayoutManager: NSLayoutManager {
                         .fill(using: .sourceOver)
                 }
             }
+            // The log's coordinator is the text view's delegate.
+            MainActor.assumeIsolated { (textView.delegate as? LogTextView.Coordinator)?.textWasDrawn() }
         }
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+}
+
+/// An animated thumbnail, playing over the attachment that shows its first frame. The text view
+/// can't draw the next frame without drawing its text again, where a layer's frames are played
+/// by Core Animation, with nothing for the app to do. Until the frames are drawn, and if they
+/// can't be, there's nothing in the layer and the attachment shows through it.
+private final class AnimatedThumbnailView: NSView {
+    let file: URL
+    private var loading: Task<Void, Never>?
+
+    init(file: URL, frame: NSRect, maxPixelSize: Int) {
+        self.file = file
+        super.init(frame: frame)
+        wantsLayer = true
+        loading = Task { [weak self] in
+            guard let frames = await AnimationFrames.load(from: file, maxPixelSize: maxPixelSize) else { return }
+            self?.layer?.add(frames.animation, forKey: "frames")
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Gone from the log before its frames were drawn: nobody's waiting for the rest of them.
+    isolated deinit { loading?.cancel() }
+
+    /// Clicks and selections are the text's, attachment included.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Whether the frames stand still. It's the layer's clock that stops, which holds the frame
+    /// it stopped on and goes on from there; taking the animation away would start it over.
+    var isPaused = false {
+        didSet {
+            guard isPaused != oldValue, let layer else { return }
+            if isPaused {
+                let stoppedAt = layer.convertTime(CACurrentMediaTime(), from: nil)
+                layer.speed = 0
+                layer.timeOffset = stoppedAt
+            } else {
+                let stoppedAt = layer.timeOffset
+                layer.speed = 1
+                layer.timeOffset = 0
+                layer.beginTime = 0
+                layer.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) - stoppedAt
+            }
+        }
     }
 }
 
@@ -41,6 +93,9 @@ struct LogTextView: NSViewRepresentable {
     let messages: [ChatMessage]
     let thumbnailsByMessage: [UUID: [MessageThumbnail]]
     let showThumbnails: Bool
+    /// Whether animated thumbnails play. They stand still, where they were, while they don't:
+    /// in a window that isn't the one in use, moving pictures are in the corner of the eye.
+    let playsAnimatedThumbnails: Bool
     /// The latest Find command (Edit ▸ Find), carried out once when its number is new.
     let findRequest: ChatStore.FindRequest?
     /// The find bar went away, leaving keyboard focus on the log, where typing does nothing.
@@ -64,6 +119,14 @@ struct LogTextView: NSViewRepresentable {
         /// Start of the day the storage was last fully rendered on. Timestamps leave the date
         /// off for "today", so once the day turns every line needs re-rendering.
         var renderedDay: Date?
+        /// What's playing: one for each animated thumbnail in view, from the top down.
+        fileprivate var animatedThumbnails: [AnimatedThumbnailView] = []
+        /// See LogTextView.playsAnimatedThumbnails.
+        var animatedThumbnailsArePaused = false {
+            didSet { for view in animatedThumbnails { view.isPaused = animatedThumbnailsArePaused } }
+        }
+        private var isUpdatingAnimatedThumbnailsSoon = false
+        var animatedImagesObserver: Any?
 
         isolated deinit {
             if let observer = boundsObserver {
@@ -72,6 +135,74 @@ struct LogTextView: NSViewRepresentable {
             if let observer = frameObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
+            if let observer = animatedImagesObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        /// The text has just been drawn, so it may have been laid out again and its attachments
+        /// moved, as when the log's width changes. What's playing follows once the drawing is
+        /// over: views aren't to be moved in the middle of it.
+        func textWasDrawn() {
+            guard !isUpdatingAnimatedThumbnailsSoon else { return }
+            isUpdatingAnimatedThumbnailsSoon = true
+            Task {
+                isUpdatingAnimatedThumbnailsSoon = false
+                updateAnimatedThumbnails()
+            }
+        }
+
+        /// Gives each animated thumbnail in view something playing it, placed where its
+        /// attachment is now, and takes away what was playing those no longer in view or in the
+        /// log. So it's called whenever the text, its layout or the part of it in view changes.
+        /// Only what's in view plays, because playing takes memory: every frame, drawn.
+        ///
+        /// It reads the layout there is, and never asks for any: laying text out from here,
+        /// inside the scroll view's notifications, moves where the log ends up scrolled to.
+        func updateAnimatedThumbnails() {
+            guard let textView, let layoutManager = textView.layoutManager, let container = textView.textContainer,
+                  let storage = textView.textStorage else { return }
+            let visible = textView.visibleRect
+            let origin = textView.textContainerOrigin
+            // Text is laid out from the top. Until that has reached the end of what's in view,
+            // as it hasn't just after an edit, nothing says where the attachments are, and what's
+            // playing stays as it is. The text is drawn once it's laid out, which comes back here.
+            guard layoutManager.firstUnlaidCharacterIndex() >= storage.length
+                    || origin.y + layoutManager.usedRect(for: container).maxY >= visible.maxY else { return }
+
+            var leftover = animatedThumbnails
+            animatedThumbnails = []
+            // "Auto-Play Animated Images", in the system's Accessibility settings.
+            if AccessibilitySettings.animatedImagesEnabled, !visible.isEmpty {
+                let glyphs = layoutManager.glyphRange(forBoundingRectWithoutAdditionalLayout: visible.offsetBy(dx: -origin.x, dy: -origin.y), in: container)
+                let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+                storage.enumerateAttribute(.ircAnimatedThumbnail, in: characters) { value, range, _ in
+                    guard let file = value as? URL else { return }
+                    // An attachment sits on its line's baseline.
+                    let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+                    let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+                    let baseline = layoutManager.location(forGlyphAt: glyph)
+                    let size = layoutManager.attachmentSize(forGlyphAt: glyph)
+                    let frame = NSRect(x: origin.x + line.minX + baseline.x, y: origin.y + line.minY + baseline.y - size.height,
+                                       width: size.width, height: size.height)
+                    guard frame.intersects(visible) else { return }
+
+                    if let index = leftover.firstIndex(where: { $0.file == file }) {
+                        let view = leftover.remove(at: index)
+                        // Only a real move: this runs after every drawing, and must not cause one.
+                        if view.frame != frame { view.frame = frame }
+                        animatedThumbnails.append(view)
+                    } else {
+                        // Frames with the pixels this screen shows the thumbnail in.
+                        let scale = textView.window?.backingScaleFactor ?? 1
+                        let view = AnimatedThumbnailView(file: file, frame: frame, maxPixelSize: Int(max(size.width, size.height) * scale))
+                        textView.addSubview(view)
+                        view.isPaused = animatedThumbnailsArePaused
+                        animatedThumbnails.append(view)
+                    }
+                }
+            }
+            for view in leftover { view.removeFromSuperview() }
         }
 
         /// Opens links in the browser. Everything rendered as a link is a web link already
@@ -142,6 +273,7 @@ struct LogTextView: NSViewRepresentable {
             MainActor.assumeIsolated {
                 guard let coordinator, let tv = coordinator.textView, let sv = coordinator.scrollView else { return }
                 coordinator.isPinnedToBottom = isAtBottom(textView: tv, scrollView: sv)
+                coordinator.updateAnimatedThumbnails()
             }
         }
         scroll.postsFrameChangedNotifications = true
@@ -151,10 +283,16 @@ struct LogTextView: NSViewRepresentable {
                 if coordinator.isPinnedToBottom {
                     tv.scrollToEndOfDocument(nil)
                 }
+                coordinator.updateAnimatedThumbnails()
             }
         }
+        coordinator.animatedImagesObserver = NotificationCenter.default.addObserver(forName: AccessibilitySettings.animatedImagesEnabledDidChangeNotification, object: nil, queue: .main) { [weak coordinator] _ in
+            MainActor.assumeIsolated { coordinator?.updateAnimatedThumbnails() }
+        }
         coordinator.onFindBarClosed = onFindBarClosed
-        coordinator.findBarObservation = scroll.observe(\.isFindBarVisible, options: [.new]) { [weak coordinator] _, change in
+        coordinator.animatedThumbnailsArePaused = !playsAnimatedThumbnails
+        coordinator.findBarObservation
+ = scroll.observe(\.isFindBarVisible, options: [.new]) { [weak coordinator] _, change in
             guard change.newValue == false else { return }
             MainActor.assumeIsolated { coordinator?.onFindBarClosed() }
         }
@@ -169,6 +307,7 @@ struct LogTextView: NSViewRepresentable {
         guard let textView = nsView.documentView as? NSTextView else { return }
         let coordinator = context.coordinator
         coordinator.onFindBarClosed = onFindBarClosed
+        coordinator.animatedThumbnailsArePaused = !playsAnimatedThumbnails
 
         let selectionChanged = coordinator.lastSelectionToken != selectionToken
         let dayChanged = coordinator.renderedDay != Calendar.current.startOfDay(for: .now)
@@ -194,6 +333,7 @@ struct LogTextView: NSViewRepresentable {
                 nsView.reflectScrolledClipView(nsView.contentView)
             }
             CATransaction.commit()
+            coordinator.updateAnimatedThumbnails()
         }
 
         if let findRequest, coordinator.lastFindRequest != findRequest.number {
@@ -380,6 +520,9 @@ struct LogTextView: NSViewRepresentable {
                 let range = NSRange(location: 0, length: attStr.length)
                 attStr.addAttribute(.link, value: item.url, range: range)
                 attStr.addAttribute(.underlineStyle, value: 0, range: range)
+                if item.image != nil, let animation = item.animation {
+                    attStr.addAttribute(.ircAnimatedThumbnail, value: animation, range: range)
+                }
                 combined.append(attStr)
                 if i < thumbs.count - 1 { combined.append(NSAttributedString(string: "\n", attributes: attrs)) }
             }

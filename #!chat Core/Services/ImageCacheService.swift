@@ -124,8 +124,11 @@ final class ImageCacheService {
             return nil
         }
 
-        // Touch the file to update modification date (keeps frequently-used images from being pruned)
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path(percentEncoded: false))
+        // Touch the file to update modification date (keeps frequently-used images from being pruned),
+        // and its animation's, if it has one
+        for file in [fileURL, animationFile(forKey: cacheKey)] {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path(percentEncoded: false))
+        }
 
         // Store in memory cache for next time
         imageCache.setObject(image, forKey: cacheKey as NSString, cost: Self.memoryCost(of: image))
@@ -136,6 +139,12 @@ final class ImageCacheService {
     /// cache's total cost limit means something.
     private static func memoryCost(of image: CGImage) -> Int {
         image.width * image.height * 4
+    }
+
+    /// Where an animated GIF is kept, as it was downloaded, beside the thumbnail of its first
+    /// frame. It ends in ".cache" too, so it's pruned at the same age.
+    private func animationFile(forKey cacheKey: String) -> URL {
+        imageCacheDirectory.appending(path: "\(cacheKey).gif.cache")
     }
     
     // MARK: - Thumbnail Processing
@@ -151,13 +160,16 @@ final class ImageCacheService {
     }
 
     /// Sets the loaded image for `url` in a message's thumbnail list (appending the entry if
-    /// it's new) and publishes the updated list.
+    /// it's new), along with its animation if it's cached as one, and publishes the updated list.
     private func setThumbnailImage(_ image: CGImage, url: String, messageID: UUID) {
         guard var list = messageThumbnails[messageID] else { return }   // discarded meanwhile
+        let animationFile = animationFile(forKey: cacheKeyForURL(url))
+        let animation = FileManager.default.fileExists(atPath: animationFile.path(percentEncoded: false)) ? animationFile : nil
         if let idx = list.firstIndex(where: { $0.url == url }) {
             list[idx].image = image
+            list[idx].animation = animation
         } else {
-            list.append(MessageThumbnail(url: url, image: image))
+            list.append(MessageThumbnail(url: url, image: image, animation: animation))
         }
         messageThumbnails[messageID] = list
         onThumbnailUpdated?(messageID, list)
@@ -269,6 +281,7 @@ final class ImageCacheService {
 
         let memoryKey = cacheKeyForURL(cacheKey)
         let fileURL = imageCacheDirectory.appending(path: "\(memoryKey).cache")
+        let animationURL = animationFile(forKey: memoryKey)
 
         Task { [weak self] in
             let data: Data?
@@ -280,7 +293,7 @@ final class ImageCacheService {
                 return
             }
 
-            guard let data, let cg = await Self.makeThumbnail(from: data, cachingPNGAt: fileURL),
+            guard let data, let cg = await Self.makeThumbnail(from: data, cachingPNGAt: fileURL, animationAt: animationURL),
                   let self else { return }
 
             self.imageCache.setObject(cg, forKey: memoryKey as NSString, cost: Self.memoryCost(of: cg))
@@ -303,10 +316,20 @@ final class ImageCacheService {
     }
 
     /// Decodes a downscaled thumbnail and writes it to the disk cache, off the main actor.
-    /// A CGImage is Sendable, so it can cross back to main.
+    /// A CGImage is Sendable, so it can cross back to main. An animated GIF's thumbnail is its
+    /// first frame, and the GIF itself is kept at `animationURL`, to play from.
     @concurrent
-    private nonisolated static func makeThumbnail(from data: Data, cachingPNGAt fileURL: URL) async -> CGImage? {
+    private nonisolated static func makeThumbnail(from data: Data, cachingPNGAt fileURL: URL, animationAt animationURL: URL) async -> CGImage? {
         guard !data.isEmpty, let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+
+        #if os(macOS)   // the iPhone doesn't play them yet, and would keep megabytes for nothing
+        // Best-effort, like the thumbnail's own file below: without it the thumbnail stays still.
+        // Whatever the link served before, which may have been an animation, goes.
+        try? FileManager.default.removeItem(at: animationURL)
+        if CGImageSourceGetCount(src) > 1, CGImageSourceGetType(src) as String? == UTType.gif.identifier {
+            try? data.write(to: animationURL, options: .atomic)   // whole or not at all, for whoever reads it
+        }
+        #endif
 
         let maxPixelSize = 600
         let opts: [CFString: Any] = [
